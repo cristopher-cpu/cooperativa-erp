@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod,
-  getInventory, getMovements, sealOrder, markRetired, addFamily,
-  addProduct, updateProduct, updatePeriod, updateFamilyBalance
+  sealOrder, markRetired, updateFamilyBalance
 } from './supabaseClient';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja } from './AdminComponents';
@@ -12,38 +11,41 @@ function App() {
   const [products, setProducts] = useState([]);
   const [sealed, setSealed] = useState({});
   const [period, setPeriod] = useState(null);
-  const [inventory, setInventory] = useState({});
-  const [movements, setMovements] = useState([]);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [carts, setCarts] = useState({});
 
   useEffect(() => {
+    let cancelled = false;
+    // Safety timeout: never hang indefinitely if Supabase is slow/unresponsive
+    const timeout = setTimeout(() => { if (!cancelled) setLoading(false); }, 12000);
+
     async function loadData() {
       try {
         const [fams, prods, per] = await Promise.all([getFamilies(), getProducts(), getPeriod()]);
+        if (cancelled) return;
         setFamilies(fams);
         setProducts(prods);
         setPeriod(per);
         if (per) {
           const orders = await getSealedOrders(per.id);
-          const orderMap = {};
-          orders.forEach(o => { orderMap[o.family_id] = o; });
-          setSealed(orderMap);
+          if (!cancelled) {
+            const orderMap = {};
+            orders.forEach(o => { orderMap[o.family_id] = o; });
+            setSealed(orderMap);
+          }
         }
-        const inv = await getInventory();
-        const invMap = {};
-        inv.forEach(i => { invMap[i.product_id] = i.quantity; });
-        setInventory(invMap);
-        const movs = await getMovements();
-        setMovements(movs);
       } catch (error) {
         console.error('Error cargando datos:', error);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          clearTimeout(timeout);
+          setLoading(false);
+        }
       }
     }
     loadData();
+    return () => { cancelled = true; clearTimeout(timeout); };
   }, []);
 
   const login = u => setUser(u);
@@ -52,6 +54,7 @@ function App() {
   const cargo = period?.fixed_charge ?? 4000;
 
   const sealOrderLocal = async (fid, items, total) => {
+    if (!period) return;
     const order = {
       id: Date.now().toString(),
       family_id: fid,
@@ -88,6 +91,7 @@ function App() {
         <div>
           <div style={{ fontSize: '40px', marginBottom: '1rem' }}>🛒</div>
           <p style={{ color: '#4CAF50', fontWeight: 500 }}>Cargando Cooperativa...</p>
+          <p style={{ color: '#aaa', fontSize: '12px', marginTop: '8px' }}>Conectando con la base de datos...</p>
         </div>
       </div>
     );

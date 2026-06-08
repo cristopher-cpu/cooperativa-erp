@@ -135,8 +135,20 @@ export async function closePeriod(periodId, newPeriodData) {
     .single();
   if (createErr) {
     console.error('closePeriod (create) error:', createErr.message);
+    // Rollback: reactivate old period so we're never left without an active period
+    await supabase.from('periods').update({ active: true }).eq('id', periodId);
     return { error: createErr.message };
   }
+  return data;
+}
+
+export async function createPeriod(periodData) {
+  const { data, error } = await supabase
+    .from('periods')
+    .insert([periodData])
+    .select()
+    .single();
+  if (error) { console.error('createPeriod error:', error.message); return { error: error.message }; }
   return data;
 }
 

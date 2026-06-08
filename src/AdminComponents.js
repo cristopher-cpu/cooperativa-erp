@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -268,7 +268,7 @@ export function AdminRetiros({ families, sealed, cargo, setSealed }) {
 
 export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies }) {
   const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!period);
   const [showForm, setShowForm] = useState(false);
   const emptyForm = { type: 'ingreso', description: '', amount: '', date: new Date().toISOString().split('T')[0], family_id: '' };
   const [form, setForm] = useState(emptyForm);
@@ -766,22 +766,79 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
   const [newMonth, setNewMonth] = useState('');
   const [closing, setClosing] = useState(false);
   const [closeMsg, setCloseMsg] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createLabel, setCreateLabel] = useState('');
+  const [createMonth, setCreateMonth] = useState('');
+  const [createMsg, setCreateMsg] = useState('');
 
   const na = families.filter(f => f.role === 'familia');
   const sc = Object.keys(sealed).length;
   const pct = na.length > 0 ? Math.round(sc / na.length * 100) : 0;
 
+  // ── No active period: show create form ──────────────────────────────────────
+  if (!period) {
+    return (
+      <div>
+        <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem', marginBottom: '1.5rem' }}>
+          <p style={{ fontSize: '14px', fontWeight: 700, color: '#e65100', margin: '0 0 6px' }}>⚠ No hay período activo</p>
+          <p style={{ fontSize: '12px', color: '#666', margin: 0 }}>Crea el primer período para que las familias puedan comenzar a hacer pedidos.</p>
+        </div>
+
+        <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #c8e6c9', padding: '1.25rem' }}>
+          <p style={{ fontSize: '14px', fontWeight: 700, color: '#2e7d32', margin: '0 0 1rem' }}>Crear período</p>
+          <div style={{ display: 'grid', gap: '10px', marginBottom: '1rem' }}>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Nombre del período *</label>
+              <input type="text" placeholder="Ej: Julio 2026" value={createLabel} onChange={e => setCreateLabel(e.target.value)}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', boxSizing: 'border-box', fontSize: '13px' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Subtítulo / mes (opcional)</label>
+              <input type="text" placeholder="Ej: Julio 2026" value={createMonth} onChange={e => setCreateMonth(e.target.value)}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', boxSizing: 'border-box', fontSize: '13px' }} />
+            </div>
+          </div>
+          {createMsg && <p style={{ fontSize: '12px', color: '#c62828', margin: '0 0 10px' }}>{createMsg}</p>}
+          <button
+            onClick={async () => {
+              if (!createLabel.trim()) { setCreateMsg('Ingresa un nombre para el período'); return; }
+              setCreating(true);
+              setCreateMsg('');
+              const newPeriod = {
+                id: Date.now().toString(),
+                label: createLabel.trim(),
+                month: createMonth.trim() || createLabel.trim(),
+                active: true,
+                fixed_charge: 4000,
+                date_from: null,
+                date_to: null,
+                date_delivery: null
+              };
+              const result = await createPeriod(newPeriod);
+              if (result && result.id) {
+                setPeriod(result);
+              } else {
+                setCreateMsg(result?.error || 'Error al crear el período. Revisa la consola.');
+              }
+              setCreating(false);
+            }}
+            disabled={creating}
+            style={{ width: '100%', padding: '9px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
+            {creating ? 'Creando...' : '✓ Crear período'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const handleSaveDates = async () => {
     setLoading(true);
-    // DATE columns: send null instead of empty string
     const clean = {
       date_from: dates.date_from || null,
       date_to: dates.date_to || null,
       date_delivery: dates.date_delivery || null,
     };
     await updatePeriod(period.id, clean);
-    // Update local state regardless — Supabase v2 returns null on update without .select()
-    // supabaseClient already sanitizes internally, so this is safe
     setPeriod(p => ({ ...p, ...clean }));
     setLoading(false);
   };
@@ -790,7 +847,6 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
     if (!newLabel.trim()) { setCloseMsg('Ingresa un nombre para el nuevo período'); return; }
     setClosing(true);
 
-    // Migrar saldos: cada familia queda con su saldo anterior menos lo que debe de este período
     for (const f of na) {
       const ord = sealed[f.id];
       if (ord) {
@@ -830,7 +886,7 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
           <div>
             <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>Período activo</p>
-            <p style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0 0' }}>{period?.label}</p>
+            <p style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0 0' }}>{period.label}</p>
           </div>
           <span style={{ fontSize: '10px', fontWeight: 700, padding: '4px 10px', borderRadius: '10px', background: '#e8f5e9', color: '#2e7d32' }}>Activo</span>
         </div>
@@ -869,7 +925,7 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
       <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #ffcdd2', padding: '1.25rem' }}>
         <p style={{ fontSize: '13px', fontWeight: 700, color: '#c62828', margin: '0 0 6px' }}>Cerrar período</p>
         <p style={{ fontSize: '12px', color: '#666', margin: '0 0 1rem' }}>
-          Cierra <strong>{period?.label}</strong> y crea uno nuevo. Los saldos de cada familia se actualizarán automáticamente según sus pedidos.
+          Cierra <strong>{period.label}</strong> y crea uno nuevo. Los saldos de cada familia se actualizarán automáticamente según sus pedidos.
         </p>
 
         {!showClose ? (
