@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -196,7 +196,6 @@ export function AdminRetiros({ families, sealed, cargo, setSealed }) {
   };
 
   const markRet = async (fid, ordId) => {
-    const { markRetired } = await import('./supabaseClient');
     await markRetired(ordId);
     setSealed(p => ({ ...p, [fid]: { ...p[fid], retired: true, retired_at: new Date().toISOString() } }));
   };
@@ -312,7 +311,6 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
     setSaving(true);
     setErr('');
 
-    const { updateFamilyBalance } = await import('./supabaseClient');
     const entry = {
       id: Date.now().toString(),
       period_id: period.id,
@@ -775,16 +773,22 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
 
   const handleSaveDates = async () => {
     setLoading(true);
-    const result = await updatePeriod(period.id, dates);
-    if (result) setPeriod(p => ({ ...p, ...dates }));
+    // DATE columns: send null instead of empty string
+    const clean = {
+      date_from: dates.date_from || null,
+      date_to: dates.date_to || null,
+      date_delivery: dates.date_delivery || null,
+    };
+    await updatePeriod(period.id, clean);
+    // Update local state regardless — Supabase v2 returns null on update without .select()
+    // supabaseClient already sanitizes internally, so this is safe
+    setPeriod(p => ({ ...p, ...clean }));
     setLoading(false);
   };
 
   const handleClosePeriod = async () => {
     if (!newLabel.trim()) { setCloseMsg('Ingresa un nombre para el nuevo período'); return; }
     setClosing(true);
-
-    const { updateFamilyBalance } = await import('./supabaseClient');
 
     // Migrar saldos: cada familia queda con su saldo anterior menos lo que debe de este período
     for (const f of na) {
