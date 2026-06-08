@@ -802,18 +802,20 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
       month: newMonth.trim() || newLabel.trim(),
       active: true,
       fixed_charge: cargo,
-      date_from: '',
-      date_to: '',
-      date_delivery: ''
+      date_from: null,
+      date_to: null,
+      date_delivery: null
     };
 
-    const created = await closePeriod(period.id, newPeriod);
-    if (created) {
-      setPeriod(created);
+    const result = await closePeriod(period.id, newPeriod);
+    if (result && result.id) {
+      setPeriod(result);
       setShowClose(false);
       setCloseMsg('');
+      setNewLabel('');
+      setNewMonth('');
     } else {
-      setCloseMsg('Error al cerrar el período. Verifica permisos en Supabase.');
+      setCloseMsg(result?.error || 'Error al cerrar el período. Revisa la consola del navegador.');
     }
     setClosing(false);
   };

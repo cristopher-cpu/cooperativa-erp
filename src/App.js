@@ -557,7 +557,9 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
       <div style={{ background: '#f0f7f0', minHeight: '100vh' }}>
         <div style={{ padding: '0.75rem 1rem', background: 'white', borderBottom: '1px solid #dde8dd', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
           <button onClick={() => setHacerPedidoFam(null)} style={{ padding: '5px 12px', border: '1px solid #dde8dd', borderRadius: '6px', background: 'white', cursor: 'pointer', fontSize: '12px' }}>← Volver</button>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: '#1565c0' }}>Haciendo pedido por: {hacerPedidoFam.name}</span>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: '#1565c0' }}>
+            {hacerPedidoFam.id === user.id ? '🛒 Mi pedido (Admin)' : `Haciendo pedido por: ${hacerPedidoFam.name}`}
+          </span>
         </div>
         <FamilyApp
           user={hacerPedidoFam}
@@ -592,7 +594,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
         </div>
       </div>
 
-      <div style={{ display: 'flex', background: 'white', borderBottom: '1px solid #dde8dd', overflowX: 'auto' }}>
+      <div style={{ display: 'flex', background: 'white', borderBottom: '1px solid #dde8dd', overflowX: 'auto', alignItems: 'center' }}>
         {tabs.map(n => (
           <button key={n.id} onClick={() => setTab(n.id)}
             style={{ flex: '0 0 auto', padding: '0.7rem 0.9rem', border: 'none', borderBottom: tab === n.id ? '2px solid #1565c0' : '2px solid transparent', background: 'none', cursor: 'pointer', color: tab === n.id ? '#1565c0' : '#666', fontWeight: tab === n.id ? 600 : 400, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
@@ -600,6 +602,12 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
             {n.l}
           </button>
         ))}
+        <div style={{ marginLeft: 'auto', paddingRight: '0.75rem', flexShrink: 0 }}>
+          <button onClick={() => setHacerPedidoFam(user)}
+            style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+            🛒 Mi pedido
+          </button>
+        </div>
       </div>
 
       <div style={{ padding: '1rem' }}>

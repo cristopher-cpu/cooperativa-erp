@@ -81,9 +81,15 @@ export async function updatePeriod(periodId, updates) {
 
 export async function closePeriod(periodId, newPeriodData) {
   const { error: closeErr } = await supabase.from('periods').update({ active: false }).eq('id', periodId);
-  if (closeErr) { console.error('Error closing period:', closeErr); return null; }
+  if (closeErr) {
+    console.error('Error closing period:', closeErr);
+    return { error: closeErr.message };
+  }
   const { data, error: createErr } = await supabase.from('periods').insert([newPeriodData]).select().single();
-  if (createErr) { console.error('Error creating new period:', createErr); return null; }
+  if (createErr) {
+    console.error('Error creating new period:', createErr);
+    return { error: createErr.message };
+  }
   return data;
 }
 
