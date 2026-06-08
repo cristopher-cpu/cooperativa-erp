@@ -6,28 +6,39 @@ const SUPABASE_ANON_KEY = "sb_publishable_tElx3P7KYXfYsqzsn2R7_g_lWT0yulK";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 export async function getFamilies() {
-  const { data, error } = await supabase.from('families').select('*');
+  const { data } = await supabase.from('families').select('*');
   return data || [];
 }
 
 export async function getProducts() {
-  const { data, error } = await supabase.from('products').select('*');
+  const { data } = await supabase.from('products').select('*');
   return data || [];
 }
 
 export async function getSealedOrders(periodId) {
-  const { data, error } = await supabase.from('sealed_orders').select('*').eq('period_id', periodId);
+  const { data } = await supabase.from('sealed_orders').select('*').eq('period_id', periodId);
   return data || [];
 }
 
 export async function getPeriod() {
-  const { data, error } = await supabase.from('periods').select('*').eq('active', true).single();
+  const { data } = await supabase.from('periods').select('*').eq('active', true).single();
   return data;
+}
+
+export async function getAllPeriods() {
+  const { data } = await supabase.from('periods').select('*').order('created_at', { ascending: false });
+  return data || [];
 }
 
 export async function sealOrder(order) {
   const { data, error } = await supabase.from('sealed_orders').insert([order]);
   if (error) console.error('Error sealing order:', error);
+  return data;
+}
+
+export async function unsealOrder(orderId) {
+  const { data, error } = await supabase.from('sealed_orders').delete().eq('id', orderId);
+  if (error) console.error('Error unsealing order:', error);
   return data;
 }
 
@@ -41,6 +52,12 @@ export async function markRetired(orderId) {
 export async function addFamily(family) {
   const { data, error } = await supabase.from('families').insert([family]);
   if (error) console.error('Error adding family:', error);
+  return data;
+}
+
+export async function updateFamilyBalance(familyId, balance) {
+  const { data, error } = await supabase.from('families').update({ balance }).eq('id', familyId);
+  if (error) console.error('Error updating family balance:', error);
   return data;
 }
 
@@ -62,13 +79,39 @@ export async function updatePeriod(periodId, updates) {
   return data;
 }
 
+export async function closePeriod(periodId, newPeriodData) {
+  const { error: closeErr } = await supabase.from('periods').update({ active: false }).eq('id', periodId);
+  if (closeErr) { console.error('Error closing period:', closeErr); return null; }
+  const { data, error: createErr } = await supabase.from('periods').insert([newPeriodData]).select().single();
+  if (createErr) { console.error('Error creating new period:', createErr); return null; }
+  return data;
+}
+
+export async function getCashFlow(periodId) {
+  const { data, error } = await supabase.from('cash_flow').select('*').eq('period_id', periodId).order('date', { ascending: false });
+  if (error) { console.error('Error fetching cash flow:', error); return []; }
+  return data || [];
+}
+
+export async function addCashFlowEntry(entry) {
+  const { data, error } = await supabase.from('cash_flow').insert([entry]).select().single();
+  if (error) { console.error('Error adding cash flow entry:', error); return null; }
+  return data;
+}
+
+export async function deleteCashFlowEntry(id) {
+  const { error } = await supabase.from('cash_flow').delete().eq('id', id);
+  if (error) { console.error('Error deleting cash flow entry:', error); return false; }
+  return true;
+}
+
 export async function getInventory() {
-  const { data, error } = await supabase.from('inventory').select('*');
+  const { data } = await supabase.from('inventory').select('*');
   return data || [];
 }
 
 export async function getMovements() {
-  const { data, error } = await supabase.from('movements').select('*').order('created_at', { ascending: false });
+  const { data } = await supabase.from('movements').select('*').order('created_at', { ascending: false });
   return data || [];
 }
 
@@ -80,7 +123,6 @@ export async function addInventoryEntry(movement) {
 
 export async function updateInventory(productId, quantity) {
   const { data: existing } = await supabase.from('inventory').select('*').eq('product_id', productId).single();
-  
   if (existing) {
     const { data, error } = await supabase.from('inventory').update({ quantity }).eq('product_id', productId);
     if (error) console.error('Error updating inventory:', error);
