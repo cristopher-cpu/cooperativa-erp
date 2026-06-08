@@ -613,7 +613,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
           <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />
         )}
         {tab === 'flujo' && (
-          <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} />
+          <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />
         )}
         {tab === 'familias' && (
           <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} />

@@ -267,22 +267,26 @@ export function AdminRetiros({ families, sealed, cargo, setSealed }) {
 
 // ─── FLUJO DE CAJA ────────────────────────────────────────────────────────────
 
-export function AdminFlujoCaja({ period, setPeriod, cargo }) {
+export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ type: 'ingreso', description: '', amount: '', date: new Date().toISOString().split('T')[0] });
+  const emptyForm = { type: 'ingreso', description: '', amount: '', date: new Date().toISOString().split('T')[0], family_id: '' };
+  const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [editCargo, setEditCargo] = useState(false);
   const [cargoVal, setCargoVal] = useState(cargo.toString());
   const [savingCargo, setSavingCargo] = useState(false);
   const [err, setErr] = useState('');
   const [cashFlowError, setCashFlowError] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+
+  const fams = (families || []).filter(f => f.role === 'familia');
 
   useEffect(() => {
     if (!period) return;
     getCashFlow(period.id).then(data => {
-      if (data && !data.error) {
+      if (Array.isArray(data)) {
         setEntries(data);
       } else {
         setCashFlowError(true);
@@ -298,16 +302,46 @@ export function AdminFlujoCaja({ period, setPeriod, cargo }) {
   const egresos = entries.filter(e => e.type === 'egreso').reduce((s, e) => s + (e.amount || 0), 0);
   const balance = ingresos - egresos;
 
+  const selectedFam = fams.find(f => f.id === form.family_id);
+  const newBalancePreview = selectedFam && form.amount
+    ? (selectedFam.balance || 0) + (form.type === 'ingreso' ? parseInt(form.amount) || 0 : -(parseInt(form.amount) || 0))
+    : null;
+
   const handleAdd = async () => {
     if (!form.description.trim() || !form.amount) { setErr('Descripción y monto son obligatorios'); return; }
     setSaving(true);
-    const entry = { id: Date.now().toString(), period_id: period.id, type: form.type, description: form.description.trim(), amount: parseInt(form.amount), date: form.date };
+    setErr('');
+
+    const { updateFamilyBalance } = await import('./supabaseClient');
+    const entry = {
+      id: Date.now().toString(),
+      period_id: period.id,
+      type: form.type,
+      description: form.description.trim(),
+      amount: parseInt(form.amount),
+      date: form.date,
+      family_id: form.family_id || null,
+      family_name: selectedFam ? selectedFam.name : null,
+    };
+
     const result = await addCashFlowEntry(entry);
     if (result) {
       setEntries(p => [result, ...p]);
-      setForm({ type: 'ingreso', description: '', amount: '', date: new Date().toISOString().split('T')[0] });
+
+      // Si hay familia asignada, actualizar su saldo inmediatamente
+      if (form.family_id && selectedFam) {
+        const delta = form.type === 'ingreso' ? parseInt(form.amount) : -(parseInt(form.amount));
+        const nuevoSaldo = (selectedFam.balance || 0) + delta;
+        await updateFamilyBalance(form.family_id, nuevoSaldo);
+        if (setFamilies) {
+          setFamilies(p => p.map(f => f.id === form.family_id ? { ...f, balance: nuevoSaldo } : f));
+        }
+        setSuccessMsg(`Saldo de ${selectedFam.name} actualizado a $${nuevoSaldo.toLocaleString('es-CL')}`);
+        setTimeout(() => setSuccessMsg(''), 4000);
+      }
+
+      setForm(emptyForm);
       setShowForm(false);
-      setErr('');
     } else {
       setErr('Error al guardar. Verifica que la tabla cash_flow existe en Supabase.');
     }
@@ -356,6 +390,14 @@ export function AdminFlujoCaja({ period, setPeriod, cargo }) {
         <p style={{ fontSize: '11px', color: '#aaa', margin: '8px 0 0' }}>Este cargo se aplica a todas las familias en el período {period?.label}</p>
       </div>
 
+      {/* Mensaje de éxito */}
+      {successMsg && (
+        <div style={{ background: '#e8f5e9', border: '1px solid #81c784', borderRadius: '8px', padding: '10px 14px', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span>✓</span>
+          <p style={{ fontSize: '13px', color: '#2e7d32', fontWeight: 500, margin: 0 }}>{successMsg}</p>
+        </div>
+      )}
+
       {/* Resumen flujo */}
       {!cashFlowError && (
         <>
@@ -370,78 +412,141 @@ export function AdminFlujoCaja({ period, setPeriod, cargo }) {
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <p style={{ fontSize: '13px', fontWeight: 600, color: '#333', margin: 0 }}>Movimientos — {period?.label}</p>
-            <button onClick={() => setShowForm(true)}
-              style={{ padding: '6px 14px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>+ Agregar</button>
+            <button onClick={() => { setShowForm(true); setForm(emptyForm); setErr(''); }}
+              style={{ padding: '6px 14px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>+ Registrar movimiento</button>
           </div>
 
           {showForm && (
-            <div style={{ background: 'white', border: '1px solid #90caf9', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
+            <div style={{ background: 'white', border: '1px solid #90caf9', borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem' }}>
+              <p style={{ fontSize: '13px', fontWeight: 700, color: '#1565c0', margin: '0 0 1rem' }}>Nuevo movimiento</p>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
                 <div>
-                  <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Tipo</label>
-                  <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}
+                  <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Tipo *</label>
+                  <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value, family_id: '' }))}
                     style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px' }}>
-                    <option value="ingreso">Ingreso</option>
-                    <option value="egreso">Egreso</option>
+                    <option value="ingreso">↑ Ingreso (pago recibido)</option>
+                    <option value="egreso">↓ Egreso (gasto / compra)</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Fecha</label>
+                  <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Fecha *</label>
                   <input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))}
                     style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
                 </div>
+
+                {/* Selector de familia — visible siempre, clave para ingresos */}
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>
+                    Familia asociada {form.type === 'ingreso' ? <span style={{ color: '#1565c0', fontWeight: 600 }}>— aplica el monto directamente a su saldo</span> : <span style={{ color: '#aaa' }}>(opcional)</span>}
+                  </label>
+                  <select value={form.family_id} onChange={e => setForm(p => ({ ...p, family_id: e.target.value }))}
+                    style={{ width: '100%', padding: '7px', border: `1px solid ${form.type === 'ingreso' ? '#90caf9' : '#dde8dd'}`, borderRadius: '6px', fontSize: '13px', background: form.type === 'ingreso' ? '#f8fbff' : 'white' }}>
+                    <option value="">Sin familia específica</option>
+                    {fams.map(f => (
+                      <option key={f.id} value={f.id}>
+                        {f.name} — Saldo actual: {f.balance > 0 ? '+' : ''}${(f.balance || 0).toLocaleString('es-CL')}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Preview del nuevo saldo */}
+                  {selectedFam && form.amount && (
+                    <div style={{ marginTop: '6px', padding: '8px 12px', background: newBalancePreview >= 0 ? '#e8f5e9' : '#ffebee', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '12px', color: '#555' }}>Nuevo saldo de {selectedFam.name}</span>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: newBalancePreview >= 0 ? '#2e7d32' : '#c62828' }}>
+                        {newBalancePreview >= 0 ? '+' : ''}${(newBalancePreview || 0).toLocaleString('es-CL')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ gridColumn: 'span 2' }}>
                   <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Descripción *</label>
-                  <input type="text" placeholder="Ej: Pago Familia Pérez, Compra proveedor..." value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
+                  <input type="text"
+                    placeholder={form.type === 'ingreso' ? 'Ej: Pago cuota Junio, Abono saldo...' : 'Ej: Compra proveedor Bio, Flete...'}
+                    value={form.description}
+                    onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
                     style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
                 </div>
+
                 <div style={{ gridColumn: 'span 2' }}>
                   <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Monto CLP *</label>
                   <input type="number" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))}
-                    style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+                    style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '14px', fontWeight: 600, boxSizing: 'border-box' }} />
                 </div>
               </div>
+
               {err && <p style={{ fontSize: '12px', color: '#c62828', margin: '0 0 10px' }}>{err}</p>}
+
+              {/* Resumen de acción antes de guardar */}
+              {form.amount && form.description && (
+                <div style={{ background: form.type === 'ingreso' ? '#e8f5e9' : '#fff8e1', border: `1px solid ${form.type === 'ingreso' ? '#c8e6c9' : '#ffe082'}`, borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' }}>
+                  <p style={{ fontSize: '12px', color: '#555', margin: 0 }}>
+                    <strong>Resumen:</strong>{' '}
+                    {form.type === 'ingreso' ? 'Se registrará ingreso de' : 'Se registrará egreso de'}{' '}
+                    <strong>${(parseInt(form.amount) || 0).toLocaleString('es-CL')}</strong>
+                    {selectedFam ? <> y se <strong>actualizará el saldo de {selectedFam.name}</strong> de ${(selectedFam.balance || 0).toLocaleString('es-CL')} a <strong style={{ color: newBalancePreview >= 0 ? '#2e7d32' : '#c62828' }}>${(newBalancePreview || 0).toLocaleString('es-CL')}</strong></> : ' sin afectar saldo de ninguna familia'}.
+                  </p>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={handleAdd} disabled={saving}
-                  style={{ flex: 1, padding: '8px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>{saving ? 'Guardando...' : 'Agregar'}</button>
+                  style={{ flex: 1, padding: '9px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
+                  {saving ? 'Guardando...' : form.family_id ? `✓ Registrar y actualizar saldo` : '✓ Registrar movimiento'}
+                </button>
                 <button onClick={() => { setShowForm(false); setErr(''); }}
-                  style={{ flex: 1, padding: '8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>Cancelar</button>
+                  style={{ padding: '9px 16px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>Cancelar</button>
               </div>
             </div>
           )}
 
-          {loading ? <p style={{ color: '#888', fontSize: '13px' }}>Cargando movimientos...</p> : entries.length === 0 ? (
+          {loading ? (
+            <p style={{ color: '#888', fontSize: '13px' }}>Cargando movimientos...</p>
+          ) : entries.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem', background: 'white', borderRadius: '8px', border: '1px solid #dde8dd' }}>
               <p style={{ color: '#aaa', fontSize: '13px', margin: 0 }}>Sin movimientos registrados para este período</p>
             </div>
           ) : (
-            entries.map(e => (
-              <div key={e.id} style={{ background: 'white', border: `1px solid ${e.type === 'ingreso' ? '#c8e6c9' : '#ffcdd2'}`, borderRadius: '8px', padding: '0.8rem 1rem', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '10px', background: e.type === 'ingreso' ? '#e8f5e9' : '#ffebee', color: e.type === 'ingreso' ? '#2e7d32' : '#c62828' }}>{e.type === 'ingreso' ? '↑ Ingreso' : '↓ Egreso'}</span>
-                    <span style={{ fontSize: '11px', color: '#888' }}>{new Date(e.date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}</span>
+            entries.map(e => {
+              const entryFam = fams.find(f => f.id === e.family_id);
+              return (
+                <div key={e.id} style={{ background: 'white', border: `1px solid ${e.type === 'ingreso' ? '#c8e6c9' : '#ffcdd2'}`, borderRadius: '8px', padding: '0.8rem 1rem', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '10px', background: e.type === 'ingreso' ? '#e8f5e9' : '#ffebee', color: e.type === 'ingreso' ? '#2e7d32' : '#c62828' }}>
+                        {e.type === 'ingreso' ? '↑ Ingreso' : '↓ Egreso'}
+                      </span>
+                      {(entryFam || e.family_name) && (
+                        <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '10px', background: '#e3f2fd', color: '#1565c0' }}>
+                          {entryFam ? entryFam.name : e.family_name}
+                        </span>
+                      )}
+                      <span style={{ fontSize: '11px', color: '#aaa' }}>
+                        {new Date(e.date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '13px', fontWeight: 500, margin: '4px 0 0', color: '#333' }}>{e.description}</p>
                   </div>
-                  <p style={{ fontSize: '13px', fontWeight: 500, margin: '4px 0 0', color: '#333' }}>{e.description}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '8px' }}>
+                    <span style={{ fontSize: '15px', fontWeight: 700, color: e.type === 'ingreso' ? '#2e7d32' : '#c62828', whiteSpace: 'nowrap' }}>
+                      {e.type === 'ingreso' ? '+' : '-'}${(e.amount || 0).toLocaleString('es-CL')}
+                    </span>
+                    <button onClick={() => handleDelete(e.id)}
+                      style={{ width: '24px', height: '24px', border: '1px solid #ffcdd2', background: '#fff5f5', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', color: '#c62828', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>✕</button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span style={{ fontSize: '15px', fontWeight: 700, color: e.type === 'ingreso' ? '#2e7d32' : '#c62828' }}>
-                    {e.type === 'ingreso' ? '+' : '-'}${(e.amount || 0).toLocaleString('es-CL')}
-                  </span>
-                  <button onClick={() => handleDelete(e.id)}
-                    style={{ width: '24px', height: '24px', border: '1px solid #ffcdd2', background: '#fff5f5', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', color: '#c62828', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </>
       )}
 
       {cashFlowError && (
         <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '8px', padding: '1rem' }}>
-          <p style={{ fontSize: '13px', color: '#e65100', fontWeight: 600, margin: 0 }}>⚠ Tabla cash_flow no encontrada</p>
-          <p style={{ fontSize: '12px', color: '#666', margin: '6px 0 0' }}>Para habilitar el flujo de caja, crea la tabla <strong>cash_flow</strong> en Supabase con las columnas: id, period_id, type, description, amount, date.</p>
+          <p style={{ fontSize: '13px', color: '#e65100', fontWeight: 600, margin: 0 }}>⚠ Tabla cash_flow no disponible aún</p>
+          <p style={{ fontSize: '12px', color: '#666', margin: '6px 0 0' }}>Pendiente de creación en Supabase. El cargo fijo puede configurarse desde aquí igualmente.</p>
         </div>
       )}
     </div>
