@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -110,19 +110,38 @@ export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
 
 export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period }) {
   const [expandedFam, setExpandedFam] = useState(null);
+  const [srch, setSrch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('todos');
   const sc = Object.keys(sealed).length;
 
   const getItems = (ord) => {
     try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
   };
 
+  const filteredFamilies = families
+    .filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()))
+    .filter(f => {
+      if (statusFilter === 'sellados') return !!sealed[f.id];
+      if (statusFilter === 'pendientes') return !sealed[f.id];
+      return true;
+    });
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>Sellados: <strong>{sc}/{families.length}</strong></p>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <input type="text" placeholder="Buscar familia..." value={srch} onChange={e => setSrch(e.target.value)}
+          style={{ flex: 1, minWidth: '150px', padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px' }} />
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {['todos', 'sellados', 'pendientes'].map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              style={{ padding: '6px 12px', borderRadius: '20px', border: '1px solid', cursor: 'pointer', fontSize: '11px', fontWeight: statusFilter === s ? 700 : 400, background: statusFilter === s ? '#1565c0' : 'white', borderColor: statusFilter === s ? '#1565c0' : '#dde8dd', color: statusFilter === s ? 'white' : '#555', textTransform: 'capitalize' }}>
+              {s === 'todos' ? `Todos (${families.length})` : s === 'sellados' ? `Sellados (${sc})` : `Pendientes (${families.length - sc})`}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {families.map(f => {
+      {filteredFamilies.map(f => {
         const o = sealed[f.id];
         const isExp = expandedFam === f.id;
         const items = o ? getItems(o) : [];
@@ -558,6 +577,10 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
   const [form, setForm] = useState({ name: '', email: '', balance: '0' });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
+  const [srch, setSrch] = useState('');
+  const [pinEditId, setPinEditId] = useState(null);
+  const [pinVal, setPinVal] = useState('');
+  const [pinSaving, setPinSaving] = useState(false);
 
   const handleAdd = async () => {
     if (!form.name.trim()) { setErr('El nombre es obligatorio'); return; }
@@ -583,14 +606,32 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
     setLoading(false);
   };
 
+  const savePinFor = async (fid) => {
+    setPinSaving(true);
+    await updateFamilyPin(fid, pinVal.trim() || null);
+    setFamilies(p => p.map(f => f.id === fid ? { ...f, pin: pinVal.trim() || null } : f));
+    setPinEditId(null);
+    setPinVal('');
+    setPinSaving(false);
+  };
+
+  const clearPinFor = async (fid) => {
+    await updateFamilyPin(fid, null);
+    setFamilies(p => p.map(f => f.id === fid ? { ...f, pin: null } : f));
+  };
+
   const na = families.filter(f => f.role === 'familia');
+  const filtered = na.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
         <p style={{ fontSize: '13px', fontWeight: 500, color: '#666', margin: 0 }}>{na.length} familias registradas</p>
         {!showForm && <button onClick={() => setShowForm(true)} style={{ padding: '6px 14px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>+ Nueva familia</button>}
       </div>
+
+      <input type="text" placeholder="Buscar familia por nombre..." value={srch} onChange={e => setSrch(e.target.value)}
+        style={{ width: '100%', padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box', marginBottom: '1rem' }} />
 
       {showForm && (
         <div style={{ padding: '1rem', background: 'white', border: '1px solid #c8e6c9', borderRadius: '8px', marginBottom: '1rem' }}>
@@ -612,26 +653,62 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
         </div>
       )}
 
-      {na.map(f => (
-        <div key={f.id} style={{ padding: '0.9rem 1rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#4CAF50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700 }}>{f.initials}</div>
-            <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
-              <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
+      {filtered.map(f => (
+        <div key={f.id} style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
+          <div style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#4CAF50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
+                <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+              {sealed[f.id]
+                ? <span style={{ fontSize: '10px', fontWeight: 600, padding: '3px 7px', borderRadius: '6px', background: sealed[f.id].retired ? '#e8f5e9' : '#e3f2fd', color: sealed[f.id].retired ? '#2e7d32' : '#1565c0' }}>{sealed[f.id].retired ? '✓ Entregado' : '✓ Sellado'}</span>
+                : (
+                  <button onClick={() => onHacerPedido(f)}
+                    style={{ fontSize: '10px', padding: '4px 10px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
+                    Hacer pedido
+                  </button>
+                )
+              }
+              {f.balance !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : ''}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', textAlign: 'right' }}>
-            {sealed[f.id]
-              ? <span style={{ fontSize: '10px', fontWeight: 600, padding: '3px 7px', borderRadius: '6px', background: sealed[f.id].retired ? '#e8f5e9' : '#e3f2fd', color: sealed[f.id].retired ? '#2e7d32' : '#1565c0' }}>{sealed[f.id].retired ? '✓ Entregado' : '✓ Sellado'}</span>
-              : (
-                <button onClick={() => onHacerPedido(f)}
-                  style={{ fontSize: '10px', padding: '4px 10px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
-                  Hacer pedido
+
+          {/* PIN management */}
+          <div style={{ padding: '0.5rem 1rem', background: '#f9fafb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>
+            {pinEditId === f.id ? (
+              <>
+                <input type="text" inputMode="numeric" maxLength={6} placeholder="Ingresa PIN numérico" value={pinVal}
+                  onChange={e => setPinVal(e.target.value.replace(/[^0-9]/g, ''))}
+                  style={{ flex: 1, padding: '4px 8px', border: '1px solid #4CAF50', borderRadius: '5px', fontSize: '12px' }} />
+                <button onClick={() => savePinFor(f.id)} disabled={pinSaving}
+                  style={{ padding: '3px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
+                  {pinSaving ? '...' : '✓'}
                 </button>
-              )
-            }
-            {f.balance !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : ''}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
+                <button onClick={() => { setPinEditId(null); setPinVal(''); }}
+                  style={{ padding: '3px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+              </>
+            ) : (
+              <>
+                <span style={{ fontSize: '11px', color: f.pin ? '#2e7d32' : '#aaa', fontWeight: f.pin ? 600 : 400 }}>
+                  {f.pin ? `PIN configurado (${f.pin.length} dígitos)` : 'Sin PIN — acceso libre'}
+                </span>
+                <button onClick={() => { setPinEditId(f.id); setPinVal(f.pin || ''); }}
+                  style={{ marginLeft: 'auto', padding: '2px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#555' }}>
+                  {f.pin ? 'Cambiar' : 'Asignar PIN'}
+                </button>
+                {f.pin && (
+                  <button onClick={() => clearPinFor(f.id)}
+                    style={{ padding: '2px 8px', background: '#fff5f5', border: '1px solid #ffcdd2', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#c62828' }}>
+                    Quitar
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       ))}
@@ -761,6 +838,7 @@ export function AdminProductos({ products, setProducts }) {
 export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
   const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '' });
   const [loading, setLoading] = useState(false);
+  const [dateErr, setDateErr] = useState('');
   const [showClose, setShowClose] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newMonth, setNewMonth] = useState('');
@@ -832,6 +910,20 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
   }
 
   const handleSaveDates = async () => {
+    setDateErr('');
+    // Validate date logic
+    if (dates.date_from && dates.date_to && dates.date_from >= dates.date_to) {
+      setDateErr('La apertura de pedidos debe ser anterior al cierre');
+      return;
+    }
+    if (dates.date_to && dates.date_delivery && dates.date_delivery < dates.date_to) {
+      setDateErr('La fecha de entrega no puede ser antes del cierre de pedidos');
+      return;
+    }
+    if (dates.date_from && dates.date_delivery && dates.date_delivery < dates.date_from) {
+      setDateErr('La fecha de entrega no puede ser antes de la apertura');
+      return;
+    }
     setLoading(true);
     const clean = {
       date_from: dates.date_from || null,
@@ -915,6 +1007,11 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
           ))}
         </div>
 
+        {dateErr && (
+          <div style={{ padding: '8px 12px', background: '#ffebee', border: '1px solid #ef9a9a', borderRadius: '6px', marginBottom: '10px' }}>
+            <p style={{ fontSize: '12px', color: '#c62828', margin: 0, fontWeight: 500 }}>⚠ {dateErr}</p>
+          </div>
+        )}
         <button onClick={handleSaveDates} disabled={loading}
           style={{ width: '100%', padding: '9px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
           {loading ? 'Guardando...' : '✓ Guardar fechas'}
@@ -968,6 +1065,319 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── BODEGA ───────────────────────────────────────────────────────────────────
+
+export function AdminBodega({ period, families, setFamilies }) {
+  const [items, setItems] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedItem, setExpandedItem] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const emptyForm = { product_name: '', provider: '', unit: 'Kg', price: '', quantity: '', notes: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [formErr, setFormErr] = useState('');
+  const [assigningItem, setAssigningItem] = useState(null);
+  const [assignForm, setAssignForm] = useState({ family_id: '', quantity: '' });
+  const [assignSaving, setAssignSaving] = useState(false);
+  const [assignErr, setAssignErr] = useState('');
+
+  useEffect(() => {
+    if (!period) { setLoading(false); return; }
+    Promise.all([getBodega(period.id), getBodegaAssignments(period.id)]).then(([itms, asns]) => {
+      setItems(itms);
+      setAssignments(asns);
+      setLoading(false);
+    });
+  }, [period]);
+
+  const getRemaining = (itemId) => {
+    const item = items.find(i => i.id === itemId);
+    if (!item) return 0;
+    const used = assignments.filter(a => a.bodega_id === itemId).reduce((s, a) => s + parseFloat(a.quantity), 0);
+    return Math.max(0, parseFloat(item.quantity) - used);
+  };
+
+  const handleAddItem = async () => {
+    if (!form.product_name.trim() || !form.price || !form.quantity) { setFormErr('Nombre, precio y cantidad son obligatorios'); return; }
+    setSaving(true);
+    const item = {
+      id: Date.now().toString(),
+      product_name: form.product_name.trim(),
+      provider: form.provider.trim(),
+      unit: form.unit.trim() || 'un',
+      price: parseInt(form.price),
+      quantity: parseFloat(form.quantity),
+      notes: form.notes.trim(),
+      period_id: period.id,
+    };
+    const result = await addBodegaItem(item);
+    if (result) { setItems(p => [...p, result]); setForm(emptyForm); setShowForm(false); setFormErr(''); }
+    else { setFormErr('Error al guardar'); }
+    setSaving(false);
+  };
+
+  const handleDeleteItem = async (id) => {
+    if (assignments.some(a => a.bodega_id === id)) { alert('Elimina primero las asignaciones de este ítem.'); return; }
+    await deleteBodegaItem(id);
+    setItems(p => p.filter(i => i.id !== id));
+  };
+
+  const handleAssign = async () => {
+    if (!assignForm.family_id || !assignForm.quantity) { setAssignErr('Selecciona familia y cantidad'); return; }
+    const qty = parseFloat(assignForm.quantity);
+    if (isNaN(qty) || qty <= 0) { setAssignErr('Cantidad inválida'); return; }
+    const remaining = getRemaining(assigningItem.id);
+    if (qty > remaining + 0.001) { setAssignErr('Solo quedan ' + remaining + ' ' + assigningItem.unit + ' disponibles'); return; }
+    setAssignSaving(true);
+    const fam = families.find(f => f.id === assignForm.family_id);
+    const totalValue = Math.round(qty * assigningItem.price);
+    const asnData = {
+      id: Date.now().toString(),
+      bodega_id: assigningItem.id,
+      family_id: fam.id,
+      family_name: fam.name,
+      product_name: assigningItem.product_name,
+      quantity: qty,
+      total_value: totalValue,
+      period_id: period.id,
+    };
+    const result = await addBodegaAssignment(asnData);
+    if (result) {
+      setAssignments(p => [result, ...p]);
+      const newBal = (fam.balance || 0) - totalValue;
+      await updateFamilyBalance(fam.id, newBal);
+      setFamilies(p => p.map(f => f.id === fam.id ? { ...f, balance: newBal } : f));
+      setAssigningItem(null);
+      setAssignForm({ family_id: '', quantity: '' });
+      setAssignErr('');
+    } else { setAssignErr('Error al asignar'); }
+    setAssignSaving(false);
+  };
+
+  const handleDeleteAssignment = async (asn) => {
+    await deleteBodegaAssignment(asn.id);
+    setAssignments(p => p.filter(a => a.id !== asn.id));
+    const fam = families.find(f => f.id === asn.family_id);
+    if (fam) {
+      const newBal = (fam.balance || 0) + asn.total_value;
+      await updateFamilyBalance(fam.id, newBal);
+      setFamilies(p => p.map(f => f.id === asn.family_id ? { ...f, balance: newBal } : f));
+    }
+  };
+
+  const totalBodegaValue = items.reduce((s, i) => s + parseInt(i.price) * parseFloat(i.quantity), 0);
+  const totalAssigned = assignments.reduce((s, a) => s + a.total_value, 0);
+
+  if (!period) return (
+    <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem' }}>
+      <p style={{ fontSize: '13px', color: '#e65100', margin: 0 }}>No hay período activo. Crea uno desde la pestaña Período.</p>
+    </div>
+  );
+
+  if (loading) return <p style={{ color: '#888', fontSize: '13px' }}>Cargando bodega...</p>;
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '1rem' }}>
+        {[
+          { l: 'Ítems en bodega', v: items.length, c: '#1565c0', bg: '#e3f2fd' },
+          { l: 'Valor total', v: '$' + totalBodegaValue.toLocaleString('es-CL'), c: '#2e7d32', bg: '#e8f5e9' },
+          { l: 'Total asignado', v: '$' + totalAssigned.toLocaleString('es-CL'), c: '#e65100', bg: '#fff3e0' },
+        ].map(m => (
+          <div key={m.l} style={{ padding: '0.9rem', background: m.bg, borderRadius: '8px', textAlign: 'center' }}>
+            <p style={{ fontSize: '10px', color: m.c, margin: 0, fontWeight: 600 }}>{m.l}</p>
+            <p style={{ fontSize: '15px', fontWeight: 700, margin: '4px 0 0', color: m.c }}>{m.v}</p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <p style={{ fontSize: '13px', fontWeight: 600, color: '#333', margin: 0 }}>Stock en bodega — {period.label}</p>
+        {!showForm && (
+          <button onClick={() => { setShowForm(true); setForm(emptyForm); setFormErr(''); }}
+            style={{ padding: '6px 14px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+            + Agregar stock
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div style={{ background: 'white', border: '1px solid #90caf9', borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#1565c0', margin: '0 0 1rem' }}>Nuevo ítem en bodega</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Producto *</label>
+              <input type="text" placeholder="Nombre del producto" value={form.product_name} onChange={e => setForm(p => ({ ...p, product_name: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Proveedor</label>
+              <input type="text" value={form.provider} onChange={e => setForm(p => ({ ...p, provider: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Unidad</label>
+              <input type="text" placeholder="Kg, un, 500gr..." value={form.unit} onChange={e => setForm(p => ({ ...p, unit: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Precio por unidad CLP *</label>
+              <input type="number" placeholder="0" value={form.price} onChange={e => setForm(p => ({ ...p, price: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Cantidad disponible *</label>
+              <input type="number" step="0.5" placeholder="0" value={form.quantity} onChange={e => setForm(p => ({ ...p, quantity: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Observaciones</label>
+              <input type="text" value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+            </div>
+          </div>
+          {form.price && form.quantity && (
+            <div style={{ padding: '8px 12px', background: '#e8f5e9', borderRadius: '6px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '12px', color: '#555' }}>Valor total en bodega</span>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#2e7d32' }}>${(parseInt(form.price || 0) * parseFloat(form.quantity || 0)).toLocaleString('es-CL')}</span>
+            </div>
+          )}
+          {formErr && <p style={{ fontSize: '12px', color: '#c62828', margin: '0 0 10px' }}>{formErr}</p>}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={handleAddItem} disabled={saving}
+              style={{ flex: 1, padding: '8px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>
+              {saving ? 'Guardando...' : '+ Agregar a bodega'}
+            </button>
+            <button onClick={() => { setShowForm(false); setFormErr(''); }}
+              style={{ padding: '8px 14px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {items.length === 0 && !showForm && (
+        <div style={{ textAlign: 'center', padding: '3rem', background: 'white', borderRadius: '10px', border: '1px solid #dde8dd' }}>
+          <p style={{ fontSize: '32px', margin: 0 }}>🏪</p>
+          <p style={{ color: '#888', fontSize: '13px', margin: '1rem 0 0' }}>La bodega está vacía para este período</p>
+        </div>
+      )}
+
+      {items.map(item => {
+        const itemAssignments = assignments.filter(a => a.bodega_id === item.id);
+        const remaining = getRemaining(item.id);
+        const isExpanded = expandedItem === item.id;
+        const isAssigning = assigningItem?.id === item.id;
+        return (
+          <div key={item.id} style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
+            <div onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+              style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <p style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>{item.product_name}</p>
+                  {item.provider && <span style={{ fontSize: '11px', color: '#888' }}>{item.provider}</span>}
+                  {item.notes && <span style={{ fontSize: '11px', color: '#aaa', fontStyle: 'italic' }}>{item.notes}</span>}
+                </div>
+                <div style={{ display: 'flex', gap: '12px', marginTop: '4px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '12px', color: '#555' }}>${parseInt(item.price).toLocaleString('es-CL')} / {item.unit}</span>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: remaining > 0 ? '#2e7d32' : '#c62828' }}>
+                    {remaining} {item.unit} disponibles
+                  </span>
+                  <span style={{ fontSize: '12px', color: '#aaa' }}>Total: {item.quantity} {item.unit}</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#1565c0' }}>
+                  ${(parseInt(item.price) * parseFloat(item.quantity)).toLocaleString('es-CL')}
+                </span>
+                <span style={{ fontSize: '11px', color: '#888' }}>{isExpanded ? '▲' : '▼'}</span>
+              </div>
+            </div>
+
+            {isExpanded && (
+              <div style={{ borderTop: '1px solid #f0f7f0', padding: '0.75rem 1rem', background: '#fafffe' }}>
+                {itemAssignments.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: '#666', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Asignaciones ({itemAssignments.length})
+                    </p>
+                    {itemAssignments.map(asn => (
+                      <div key={asn.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f7f0' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 600, padding: '2px 7px', borderRadius: '10px', background: '#e3f2fd', color: '#1565c0' }}>{asn.family_name}</span>
+                          <span style={{ fontSize: '12px', color: '#666' }}>{asn.quantity} {item.unit}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: '#c62828' }}>${asn.total_value.toLocaleString('es-CL')}</span>
+                          <button onClick={() => handleDeleteAssignment(asn)}
+                            style={{ width: '22px', height: '22px', border: '1px solid #ffcdd2', background: '#fff5f5', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', color: '#c62828', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isAssigning ? (
+                  <div style={{ background: '#f8fbff', border: '1px solid #90caf9', borderRadius: '8px', padding: '1rem' }}>
+                    <p style={{ fontSize: '12px', fontWeight: 700, color: '#1565c0', margin: '0 0 10px' }}>Asignar a familia</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Familia</label>
+                        <select value={assignForm.family_id} onChange={e => setAssignForm(p => ({ ...p, family_id: e.target.value }))}
+                          style={{ width: '100%', padding: '6px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px' }}>
+                          <option value="">Seleccionar...</option>
+                          {families.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Cantidad ({item.unit}) · máx {remaining}</label>
+                        <input type="number" step="0.5" max={remaining} placeholder="0" value={assignForm.quantity}
+                          onChange={e => setAssignForm(p => ({ ...p, quantity: e.target.value }))}
+                          style={{ width: '100%', padding: '6px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px', boxSizing: 'border-box' }} />
+                      </div>
+                    </div>
+                    {assignForm.quantity && assignForm.family_id && (function() {
+                      const fam = families.find(f => f.id === assignForm.family_id);
+                      const val = Math.round(parseFloat(assignForm.quantity || 0) * item.price);
+                      const newBal = (fam ? fam.balance || 0 : 0) - val;
+                      return (
+                        <div style={{ padding: '8px 10px', background: '#fff3e0', borderRadius: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '12px', color: '#555' }}>Cargo: ${val.toLocaleString('es-CL')} · Nuevo saldo {fam ? fam.name : ''}:</span>
+                          <span style={{ fontSize: '13px', fontWeight: 700, color: newBal >= 0 ? '#2e7d32' : '#c62828' }}>${newBal.toLocaleString('es-CL')}</span>
+                        </div>
+                      );
+                    })()}
+                    {assignErr && <p style={{ fontSize: '11px', color: '#c62828', margin: '0 0 8px' }}>{assignErr}</p>}
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button onClick={handleAssign} disabled={assignSaving}
+                        style={{ flex: 1, padding: '7px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '12px' }}>
+                        {assignSaving ? 'Asignando...' : 'Confirmar asignación'}
+                      </button>
+                      <button onClick={() => { setAssigningItem(null); setAssignErr(''); }}
+                        style={{ padding: '7px 12px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => { setAssigningItem(item); setAssignForm({ family_id: '', quantity: '' }); setAssignErr(''); }}
+                      disabled={remaining <= 0}
+                      style={{ flex: 1, padding: '7px', background: remaining > 0 ? '#e3f2fd' : '#f5f5f5', color: remaining > 0 ? '#1565c0' : '#999', border: '1px solid ' + (remaining > 0 ? '#90caf9' : '#dde8dd'), borderRadius: '6px', cursor: remaining > 0 ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600 }}>
+                      {remaining > 0 ? '+ Asignar a familia' : 'Sin stock disponible'}
+                    </button>
+                    <button onClick={() => handleDeleteItem(item.id)}
+                      style={{ padding: '7px 12px', background: '#fff5f5', border: '1px solid #ffcdd2', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#c62828' }}>
+                      Eliminar
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
