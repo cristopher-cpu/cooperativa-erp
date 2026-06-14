@@ -178,6 +178,54 @@ export async function deleteCashFlowEntry(id) {
   return !error;
 }
 
+export async function updateFamilyPin(familyId, pin) {
+  const { data, error } = await supabase.from('families').update({ pin: pin || null }).eq('id', familyId).select().single();
+  if (error) console.error('updateFamilyPin error:', error.message);
+  return data;
+}
+
+export async function getBodega(periodId) {
+  const { data, error } = await supabase.from('bodega').select('*').eq('period_id', periodId).order('created_at', { ascending: true });
+  if (error) { console.error('getBodega error:', error.message); return []; }
+  return data || [];
+}
+
+export async function addBodegaItem(item) {
+  const { data, error } = await supabase.from('bodega').insert([item]).select().single();
+  if (error) { console.error('addBodegaItem error:', error.message); return null; }
+  return data;
+}
+
+export async function updateBodegaItem(id, updates) {
+  const { data, error } = await supabase.from('bodega').update(updates).eq('id', id).select().single();
+  if (error) { console.error('updateBodegaItem error:', error.message); return null; }
+  return data;
+}
+
+export async function deleteBodegaItem(id) {
+  const { error } = await supabase.from('bodega').delete().eq('id', id);
+  if (error) console.error('deleteBodegaItem error:', error.message);
+  return !error;
+}
+
+export async function getBodegaAssignments(periodId) {
+  const { data, error } = await supabase.from('bodega_assignments').select('*').eq('period_id', periodId).order('assigned_at', { ascending: false });
+  if (error) { console.error('getBodegaAssignments error:', error.message); return []; }
+  return data || [];
+}
+
+export async function addBodegaAssignment(assignment) {
+  const { data, error } = await supabase.from('bodega_assignments').insert([assignment]).select().single();
+  if (error) { console.error('addBodegaAssignment error:', error.message); return null; }
+  return data;
+}
+
+export async function deleteBodegaAssignment(id) {
+  const { error } = await supabase.from('bodega_assignments').delete().eq('id', id);
+  if (error) console.error('deleteBodegaAssignment error:', error.message);
+  return !error;
+}
+
 export async function getInventory() {
   const { data } = await supabase.from('inventory').select('*');
   return data || [];

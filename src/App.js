@@ -4,7 +4,7 @@ import {
   sealOrder, markRetired, updateFamilyBalance
 } from './supabaseClient';
 import './App.css';
-import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja } from './AdminComponents';
+import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega } from './AdminComponents';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -17,7 +17,6 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    // Safety timeout: never hang indefinitely if Supabase is slow/unresponsive
     const timeout = setTimeout(() => { if (!cancelled) setLoading(false); }, 12000);
 
     async function loadData() {
@@ -141,9 +140,75 @@ function App() {
   );
 }
 
+// ─── WELCOME / LOGIN ──────────────────────────────────────────────────────────
+
 function Welcome({ families, onLogin, period }) {
+  const [loginFam, setLoginFam] = useState(null);
+  const [pin, setPin] = useState('');
+  const [pinErr, setPinErr] = useState('');
+
   const admins = families.filter(f => f.role === 'admin');
   const fams = families.filter(f => f.role === 'familia');
+
+  const selectFam = (f) => { setLoginFam(f); setPin(''); setPinErr(''); };
+
+  const tryLogin = () => {
+    if (loginFam?.pin && pin !== loginFam.pin) { setPinErr('PIN incorrecto'); return; }
+    onLogin(loginFam);
+  };
+
+  if (loginFam) {
+    const isAdmin = loginFam.role === 'admin';
+    const color = isAdmin ? '#1565c0' : '#4CAF50';
+    return (
+      <div style={{ background: '#f0f7f0', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+        <div style={{ background: 'white', borderRadius: '16px', padding: '2rem', width: '100%', maxWidth: '340px', boxShadow: '0 8px 32px rgba(0,0,0,0.10)' }}>
+          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+            <div style={{ width: 64, height: 64, borderRadius: '50%', background: color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', fontWeight: 700, margin: '0 auto 12px' }}>{loginFam.initials}</div>
+            <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 6px', color: '#222' }}>{loginFam.name}</h2>
+            {isAdmin && <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: '#1565c0', color: 'white' }}>ADMINISTRADOR</span>}
+          </div>
+
+          {loginFam.pin ? (
+            <div>
+              <p style={{ fontSize: '13px', color: '#666', textAlign: 'center', margin: '0 0 1rem' }}>Ingresa tu PIN de acceso</p>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={6}
+                value={pin}
+                onChange={e => { setPin(e.target.value); setPinErr(''); }}
+                onKeyDown={e => e.key === 'Enter' && tryLogin()}
+                autoFocus
+                placeholder="• • • •"
+                style={{ width: '100%', padding: '12px', textAlign: 'center', fontSize: '26px', border: `2px solid ${pinErr ? '#ef9a9a' : '#dde8dd'}`, borderRadius: '10px', letterSpacing: '6px', boxSizing: 'border-box', outline: 'none', marginBottom: '8px' }}
+              />
+              {pinErr && <p style={{ fontSize: '12px', color: '#c62828', textAlign: 'center', margin: '0 0 10px', fontWeight: 500 }}>{pinErr}</p>}
+              <button onClick={tryLogin}
+                style={{ width: '100%', padding: '11px', background: color, color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '15px', marginBottom: '10px' }}>
+                Entrar
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ padding: '10px', background: '#f5f5f5', borderRadius: '8px', marginBottom: '1rem', textAlign: 'center' }}>
+                <p style={{ fontSize: '12px', color: '#aaa', margin: 0 }}>Sin PIN configurado — acceso directo</p>
+              </div>
+              <button onClick={() => onLogin(loginFam)}
+                style={{ width: '100%', padding: '11px', background: color, color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '15px', marginBottom: '10px' }}>
+                Entrar
+              </button>
+            </div>
+          )}
+
+          <button onClick={() => setLoginFam(null)}
+            style={{ width: '100%', padding: '8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#666' }}>
+            ← Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '2rem', background: '#f0f7f0', minHeight: '100vh' }}>
@@ -156,10 +221,14 @@ function Welcome({ families, onLogin, period }) {
       <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Administración</h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
         {admins.map(f => (
-          <button key={f.id} onClick={() => onLogin(f)}
-            style={{ padding: '1.25rem', border: '1.5px solid #2196F3', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(33,150,243,0.08)' }}>
-            <strong style={{ fontSize: '15px', color: '#1565c0' }}>{f.name}</strong>
-            <p style={{ fontSize: '11px', color: '#1976d2', margin: '6px 0 0', fontWeight: 600 }}>ADMINISTRADOR</p>
+          <button key={f.id} onClick={() => selectFam(f)}
+            style={{ padding: '1.25rem', border: '1.5px solid #2196F3', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(33,150,243,0.08)', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#1565c0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
+            <div>
+              <strong style={{ fontSize: '15px', color: '#1565c0', display: 'block' }}>{f.name}</strong>
+              <span style={{ fontSize: '10px', color: '#1976d2', fontWeight: 600 }}>ADMINISTRADOR</span>
+              {f.pin && <span style={{ marginLeft: '6px', fontSize: '9px', color: '#aaa' }}>🔒</span>}
+            </div>
           </button>
         ))}
       </div>
@@ -167,11 +236,12 @@ function Welcome({ families, onLogin, period }) {
       <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Familias ({fams.length})</h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
         {fams.map(f => (
-          <button key={f.id} onClick={() => onLogin(f)}
+          <button key={f.id} onClick={() => selectFam(f)}
             style={{ padding: '1rem 1.25rem', border: '1px solid #dde8dd', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
               <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#4CAF50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>{f.initials}</div>
-              <strong style={{ fontSize: '14px' }}>{f.name}</strong>
+              <strong style={{ fontSize: '14px', flex: 1 }}>{f.name}</strong>
+              {f.pin && <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>}
             </div>
             {f.balance !== 0 && (
               <p style={{ fontSize: '11px', color: f.balance > 0 ? '#2e7d32' : '#c62828', margin: 0, fontWeight: 500 }}>
@@ -184,6 +254,8 @@ function Welcome({ families, onLogin, period }) {
     </div>
   );
 }
+
+// ─── FAMILY APP ───────────────────────────────────────────────────────────────
 
 function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargo, logout }) {
   const [tab, setTab] = useState('catalog');
@@ -201,6 +273,7 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
       const pr = products.find(x => x.id === parseInt(id));
       return pr ? { ...pr, qty, sub: pr.price * qty } : null;
     }).filter(Boolean),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [cart, products]
   );
 
@@ -213,7 +286,19 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
     products.filter(p => (cat === 'all' || p.category === cat) && (!srch || p.name.toLowerCase().includes(srch.toLowerCase()) || p.provider.toLowerCase().includes(srch.toLowerCase()))),
     [cat, srch, products]
   );
-  const daysLeft = period?.date_to ? Math.ceil((new Date(period.date_to + 'T23:59:59') - new Date()) / 864e5) : null;
+
+  // Period open/closed logic
+  const now = new Date();
+  const fechaApertura = period?.date_from ? new Date(period.date_from + 'T00:00:00') : null;
+  const fechaCierre = period?.date_to ? new Date(period.date_to + 'T23:59:59') : null;
+  const noAbierto = fechaApertura && now < fechaApertura;
+  const cerrado = fechaCierre && now > fechaCierre;
+  const puedeOrdenar = !!(period?.active && !noAbierto && !cerrado);
+
+  const daysLeft = period?.date_to ? Math.ceil((new Date(period.date_to + 'T23:59:59') - now) / 864e5) : null;
+  const daysToDelivery = period?.date_delivery ? Math.ceil((new Date(period.date_delivery + 'T23:59:59') - now) / 864e5) : null;
+  const alertaCierre = daysLeft !== null && daysLeft >= 0 && daysLeft <= 1;
+  const alertaEntrega = daysToDelivery !== null && daysToDelivery >= 0 && daysToDelivery <= 1;
 
   const ordItems = ord ? (Array.isArray(ord.items) ? ord.items : (() => { try { return JSON.parse(ord.items); } catch { return []; } })()) : [];
 
@@ -235,15 +320,40 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
         </div>
       </div>
 
-      {/* Banner período */}
+      {/* Alertas período */}
       {period && (
-        <div style={{ padding: '0.5rem 1rem', background: daysLeft !== null && daysLeft <= 5 && daysLeft >= 0 ? '#fff8e1' : '#e8f5e9', borderBottom: '1px solid #c8e6c9', fontSize: '12px', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600, color: '#2e7d32' }}>{period.label}</span>
-          {period.date_from && <span>📅 {new Date(period.date_from).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })} — {new Date(period.date_to).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}</span>}
-          {period.date_delivery && <span>🚚 Entrega: {new Date(period.date_delivery).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}</span>}
-          {ord?.retired && <span style={{ fontWeight: 600, color: '#2e7d32' }}>✓ Pedido entregado</span>}
-          {!ord?.retired && daysLeft !== null && daysLeft <= 5 && daysLeft >= 0 && <span style={{ fontWeight: 600, color: '#e65100' }}>⏰ Cierra en {daysLeft} día{daysLeft !== 1 ? 's' : ''}</span>}
-        </div>
+        <>
+          {noAbierto && (
+            <div style={{ padding: '0.6rem 1rem', background: '#e3f2fd', borderBottom: '1px solid #90caf9', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span>📅</span>
+              <span style={{ color: '#1565c0', fontWeight: 500 }}>
+                Pedidos abren el {new Date(period.date_from).toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })}
+              </span>
+            </div>
+          )}
+          {cerrado && (
+            <div style={{ padding: '0.6rem 1rem', background: '#fbe9e7', borderBottom: '1px solid #ffab91', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span>🔒</span>
+              <span style={{ color: '#bf360c', fontWeight: 500 }}>Período de pedidos cerrado</span>
+            </div>
+          )}
+          {!noAbierto && !cerrado && (alertaCierre || alertaEntrega) && (
+            <div style={{ padding: '0.6rem 1rem', background: '#fff8e1', borderBottom: '1px solid #ffe082', fontSize: '12px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {alertaCierre && daysLeft === 0 && <span style={{ color: '#e65100', fontWeight: 700 }}>⏰ ¡Hoy cierra el período de pedidos!</span>}
+              {alertaCierre && daysLeft === 1 && <span style={{ color: '#e65100', fontWeight: 700 }}>⏰ Mañana cierra el período de pedidos</span>}
+              {alertaEntrega && daysToDelivery === 0 && <span style={{ color: '#2e7d32', fontWeight: 700 }}>🚚 ¡Hoy es la entrega!</span>}
+              {alertaEntrega && daysToDelivery === 1 && <span style={{ color: '#2e7d32', fontWeight: 700 }}>🚚 Mañana es la entrega</span>}
+            </div>
+          )}
+          {!noAbierto && !cerrado && !alertaCierre && !alertaEntrega && (
+            <div style={{ padding: '0.5rem 1rem', background: '#e8f5e9', borderBottom: '1px solid #c8e6c9', fontSize: '12px', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, color: '#2e7d32' }}>{period.label}</span>
+              {period.date_from && <span>📅 {new Date(period.date_from).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })} — {new Date(period.date_to).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}</span>}
+              {period.date_delivery && <span>🚚 Entrega: {new Date(period.date_delivery).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })}</span>}
+              {ord?.retired && <span style={{ fontWeight: 600, color: '#2e7d32' }}>✓ Pedido entregado</span>}
+            </div>
+          )}
+        </>
       )}
 
       {/* Tabs */}
@@ -268,7 +378,7 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
                   <p style={{ fontSize: '13px', fontWeight: 600, color: ord.retired ? '#2e7d32' : '#1565c0', margin: 0 }}>{ord.retired ? '✓ Pedido entregado' : '✓ Pedido sellado — en espera de entrega'}</p>
                   <p style={{ fontSize: '11px', color: '#666', margin: '3px 0 0' }}>{ord.retired ? 'Entregado el ' + new Date(ord.retired_at).toLocaleString('es-CL') : 'Sellado el ' + new Date(ord.sealed_at).toLocaleString('es-CL')}</p>
                 </div>
-                {!ord.retired && period?.active && <button onClick={() => unsealOrderLocal(user.id)} style={{ padding: '6px 12px', background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 500 }}>Modificar</button>}
+                {!ord.retired && puedeOrdenar && <button onClick={() => unsealOrderLocal(user.id)} style={{ padding: '6px 12px', background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 500 }}>Modificar</button>}
               </div>
             )}
             <div style={{ marginBottom: '0.75rem' }}>
@@ -286,7 +396,7 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))', gap: '10px' }}>
               {vis.map(pr => {
                 const qty = ord ? (ordItems.find(x => x.id === pr.id) || {}).qty || 0 : (cart[pr.id] || 0);
-                const lk = !!ord;
+                const lk = !!ord || !puedeOrdenar;
                 return (
                   <div key={pr.id} style={{ padding: '0.9rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', opacity: pr.in_stock ? 1 : 0.55, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                     <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '4px', background: pr.in_stock ? '#e8f5e9' : '#ffebee', color: pr.in_stock ? '#2e7d32' : '#c62828' }}>{pr.in_stock ? '✓ Disponible' : 'Sin stock'}</span>
@@ -320,10 +430,8 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
                     <p style={{ fontSize: '14px', fontWeight: 600, color: ord.retired ? '#2e7d32' : '#1565c0', margin: 0 }}>✓ {ord.retired ? 'Pedido entregado' : 'Pedido sellado'}</p>
                     <p style={{ fontSize: '11px', color: '#666', margin: '4px 0 0' }}>Sellado: {new Date(ord.sealed_at).toLocaleString('es-CL')}</p>
                   </div>
-                  {!ord.retired && period?.active && <button onClick={() => unsealOrderLocal(user.id)} style={{ padding: '6px 14px', background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>Modificar</button>}
+                  {!ord.retired && puedeOrdenar && <button onClick={() => unsealOrderLocal(user.id)} style={{ padding: '6px 14px', background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>Modificar</button>}
                 </div>
-
-                {/* Detalle productos */}
                 {ordItems.filter(i => i.qty > 0).map(i => (
                   <div key={i.id} style={{ padding: '0.8rem 1rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
@@ -336,8 +444,6 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
                     </div>
                   </div>
                 ))}
-
-                {/* Resumen financiero del pedido sellado */}
                 <div style={{ background: 'white', border: '1px solid #c8e6c9', borderRadius: '8px', padding: '1rem', marginTop: '1rem' }}>
                   <p style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Resumen del pedido</p>
                   {[
@@ -360,6 +466,16 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
                     <span style={{ fontSize: '16px', fontWeight: 700, color: '#2d5a2d' }}>${Math.max(0, ord.total + cargo - saldo).toLocaleString('es-CL')}</span>
                   </div>
                 </div>
+              </div>
+            ) : !puedeOrdenar ? (
+              <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
+                <p style={{ fontSize: '44px', margin: 0 }}>{noAbierto ? '📅' : '🔒'}</p>
+                <p style={{ color: '#555', marginTop: '1rem', fontWeight: 500 }}>
+                  {noAbierto ? 'Los pedidos aún no están disponibles' : 'El período de pedidos está cerrado'}
+                </p>
+                <p style={{ color: '#999', fontSize: '12px', marginTop: '4px' }}>
+                  {noAbierto ? `Abren el ${new Date(period.date_from).toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })}` : 'Consulta con el administrador'}
+                </p>
               </div>
             ) : items.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
@@ -472,7 +588,6 @@ function SaldoFamilia({ user, ord, cargo, period }) {
 
   return (
     <div>
-      {/* Tarjeta principal de saldo */}
       <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #c8e6c9', padding: '1.25rem', marginBottom: '1rem', boxShadow: '0 2px 6px rgba(76,175,80,0.08)' }}>
         <p style={{ fontSize: '11px', fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 6px' }}>Saldo disponible</p>
         <p style={{ fontSize: '32px', fontWeight: 700, margin: '0 0 4px', color: saldo > 0 ? '#2e7d32' : saldo < 0 ? '#c62828' : '#333' }}>
@@ -483,10 +598,8 @@ function SaldoFamilia({ user, ord, cargo, period }) {
         </p>
       </div>
 
-      {/* Desglose período actual */}
       <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1.25rem', marginBottom: '1rem' }}>
         <p style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>Período {period?.label}</p>
-
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f0f7f0' }}>
             <span style={{ fontSize: '13px', color: '#555' }}>Saldo anterior</span>
@@ -494,7 +607,6 @@ function SaldoFamilia({ user, ord, cargo, period }) {
               {saldo > 0 ? '+ ' : saldo < 0 ? '- ' : ''} ${Math.abs(saldo).toLocaleString('es-CL')}
             </span>
           </div>
-
           {ord ? (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f0f7f0' }}>
@@ -524,7 +636,6 @@ function SaldoFamilia({ user, ord, cargo, period }) {
         </div>
       </div>
 
-      {/* Estado del pedido */}
       {ord && (
         <div style={{ background: ord.retired ? '#e8f5e9' : '#e3f2fd', border: `1px solid ${ord.retired ? '#81c784' : '#64b5f6'}`, borderRadius: '10px', padding: '1rem', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ fontSize: '28px' }}>{ord.retired ? '✅' : '📦'}</span>
@@ -540,6 +651,8 @@ function SaldoFamilia({ user, ord, cargo, period }) {
   );
 }
 
+// ─── ADMIN APP ────────────────────────────────────────────────────────────────
+
 function AdminApp({ user, families, setFamilies, products, setProducts, sealed, setSealed, period, setPeriod, cargo, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
   const [tab, setTab] = useState('dashboard');
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
@@ -550,6 +663,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
     { id: 'pedidos', l: 'Pedidos', ic: '📋' },
     { id: 'retiros', l: 'Retiros', ic: '🚚' },
     { id: 'flujo', l: 'Flujo Caja', ic: '💵' },
+    { id: 'bodega', l: 'Bodega', ic: '🏪' },
     { id: 'familias', l: 'Familias', ic: '👥' },
     { id: 'productos', l: 'Productos', ic: '🏷️' },
     { id: 'saldos', l: 'Saldos', ic: '💳' },
@@ -615,30 +729,15 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
       </div>
 
       <div style={{ padding: '1rem' }}>
-        {tab === 'dashboard' && (
-          <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />
-        )}
-        {tab === 'pedidos' && (
-          <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />
-        )}
-        {tab === 'retiros' && (
-          <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />
-        )}
-        {tab === 'flujo' && (
-          <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />
-        )}
-        {tab === 'familias' && (
-          <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} />
-        )}
-        {tab === 'productos' && (
-          <AdminProductos products={products} setProducts={setProducts} />
-        )}
-        {tab === 'saldos' && (
-          <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />
-        )}
-        {tab === 'periodo' && (
-          <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} />
-        )}
+        {tab === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
+        {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
+        {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
+        {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
+        {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} />}
+        {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} />}
+        {tab === 'productos' && <AdminProductos products={products} setProducts={setProducts} />}
+        {tab === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
+        {tab === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} />}
       </div>
     </div>
   );
