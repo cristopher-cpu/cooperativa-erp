@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod,
-  sealOrder, markRetired, updateFamilyBalance
+  sealOrder, markRetired, updateFamilyBalance,
+  getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
 } from './supabaseClient';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega } from './AdminComponents';
@@ -127,6 +128,8 @@ function App() {
   return (
     <FamilyApp
       user={user}
+      families={families}
+      setFamilies={setFamilies}
       products={products}
       sealed={sealed}
       sealOrderLocal={sealOrderLocal}
@@ -257,16 +260,32 @@ function Welcome({ families, onLogin, period }) {
 
 // ─── FAMILY APP ───────────────────────────────────────────────────────────────
 
-function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargo, logout }) {
+function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargo, logout }) {
   const [tab, setTab] = useState('catalog');
   const [cat, setCat] = useState('all');
   const [srch, setSrch] = useState('');
   const [conf, setConf] = useState(false);
+  const [bodega, setBodega] = useState([]);
+  const [bodegaAssignments, setBodegaAssignments] = useState([]);
+  const [reservingItem, setReservingItem] = useState(null);
+  const [reserveQty, setReserveQty] = useState('');
+  const [reserveErr, setReserveErr] = useState('');
+  const [reserveSaving, setReserveSaving] = useState(false);
+
+  useEffect(() => {
+    if (!period) return;
+    Promise.all([getBodega(period.id), getBodegaAssignments(period.id)]).then(([itms, asns]) => {
+      setBodega(itms);
+      setBodegaAssignments(asns);
+    });
+  }, [period]);
 
   const cart = carts[user.id] || {};
   const setCart = fn => setCarts(p => ({ ...p, [user.id]: fn(p[user.id] || {}) }));
   const add = id => setCart(p => ({ ...p, [id]: (p[id] || 0) + 1 }));
   const sub = id => setCart(p => ({ ...p, [id]: Math.max(0, (p[id] || 0) - 1) }));
+
+  const currentUser = (families && families.find(f => f.id === user.id)) || user;
 
   const items = useMemo(() =>
     Object.entries(cart).filter(([, q]) => q > 0).map(([id, qty]) => {
@@ -280,7 +299,55 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
   const total = items.reduce((s, i) => s + i.sub, 0);
   const cnt = items.reduce((s, i) => s + i.qty, 0);
   const ord = sealed[user.id];
-  const saldo = user.balance || 0;
+  const saldo = currentUser.balance || 0;
+
+  const getBodegaRemaining = (itemId) => {
+    const item = bodega.find(i => i.id === itemId);
+    if (!item) return 0;
+    const used = bodegaAssignments.filter(a => a.bodega_id === itemId).reduce((s, a) => s + parseFloat(a.quantity), 0);
+    return Math.max(0, parseFloat(item.quantity) - used);
+  };
+
+  const myReservations = bodegaAssignments.filter(a => a.family_id === user.id);
+
+  const handleReserve = async () => {
+    if (!reservingItem) return;
+    const qty = parseFloat(reserveQty);
+    if (isNaN(qty) || qty <= 0) { setReserveErr('Cantidad inválida'); return; }
+    const remaining = getBodegaRemaining(reservingItem.id);
+    if (qty > remaining + 0.001) { setReserveErr('Solo quedan ' + remaining + ' ' + reservingItem.unit); return; }
+    setReserveSaving(true);
+    const totalValue = Math.round(qty * reservingItem.price);
+    const asn = {
+      id: Date.now().toString(),
+      bodega_id: reservingItem.id,
+      family_id: user.id,
+      family_name: user.name,
+      product_name: reservingItem.product_name,
+      quantity: qty,
+      total_value: totalValue,
+      period_id: period.id,
+    };
+    const result = await addBodegaAssignment(asn);
+    if (result) {
+      setBodegaAssignments(p => [result, ...p]);
+      const newBal = (currentUser.balance || 0) - totalValue;
+      await updateFamilyBalance(user.id, newBal);
+      setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: newBal } : f));
+      setReservingItem(null);
+      setReserveQty('');
+      setReserveErr('');
+    } else { setReserveErr('Error al reservar'); }
+    setReserveSaving(false);
+  };
+
+  const handleCancelReservation = async (asn) => {
+    await deleteBodegaAssignment(asn.id);
+    setBodegaAssignments(p => p.filter(a => a.id !== asn.id));
+    const newBal = (currentUser.balance || 0) + asn.total_value;
+    await updateFamilyBalance(user.id, newBal);
+    setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: newBal } : f));
+  };
   const cats = ['all', ...new Set(products.map(p => p.category))];
   const vis = useMemo(() =>
     products.filter(p => (cat === 'all' || p.category === cat) && (!srch || p.name.toLowerCase().includes(srch.toLowerCase()) || p.provider.toLowerCase().includes(srch.toLowerCase()))),
@@ -417,6 +484,74 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
                 );
               })}
             </div>
+
+            {/* PRODUCTOS DE BODEGA */}
+            {bodega.filter(item => getBodegaRemaining(item.id) > 0).length > 0 && (
+              <div style={{ marginTop: '1.5rem' }}>
+                <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  🏪 Productos disponibles en Bodega
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))', gap: '10px' }}>
+                  {bodega.filter(item => getBodegaRemaining(item.id) > 0).map(item => {
+                    const remaining = getBodegaRemaining(item.id);
+                    const myRes = myReservations.find(r => r.bodega_id === item.id);
+                    return (
+                      <div key={item.id} style={{ padding: '0.9rem', background: 'white', border: '1.5px solid #90caf9', borderRadius: '8px', boxShadow: '0 1px 3px rgba(21,101,192,0.07)' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '4px', background: '#e3f2fd', color: '#1565c0' }}>🏪 Bodega</span>
+                        <p style={{ fontWeight: 600, fontSize: '12px', lineHeight: 1.35, marginTop: '8px', marginBottom: '3px', color: '#222' }}>{item.product_name}</p>
+                        <p style={{ fontSize: '10px', color: '#888', marginBottom: '4px' }}>{item.unit} · quedan: {remaining}</p>
+                        <p style={{ fontWeight: 700, fontSize: '14px', marginBottom: '10px', color: '#1565c0' }}>${parseInt(item.price).toLocaleString('es-CL')} /{item.unit}</p>
+                        {myRes ? (
+                          <div style={{ textAlign: 'center', fontSize: '11px', padding: '5px', background: '#e3f2fd', borderRadius: '6px', color: '#1565c0', fontWeight: 600 }}>
+                            ✓ Reservado: {myRes.quantity} {item.unit}
+                          </div>
+                        ) : (
+                          <button onClick={() => { if (puedeOrdenar) { setReservingItem(item); setReserveQty(''); setReserveErr(''); } }}
+                            disabled={!puedeOrdenar}
+                            style={{ width: '100%', padding: '6px', border: `1px solid ${puedeOrdenar ? '#1565c0' : '#dde8dd'}`, background: puedeOrdenar ? '#1565c0' : 'white', color: puedeOrdenar ? 'white' : '#aaa', borderRadius: '6px', cursor: puedeOrdenar ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600 }}>
+                            + Reservar
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* MODAL RESERVA BODEGA */}
+            {reservingItem && (
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
+                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', width: '100%', maxWidth: '320px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
+                  <p style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 4px', color: '#1565c0' }}>🏪 Reservar de Bodega</p>
+                  <p style={{ fontSize: '13px', color: '#555', margin: '0 0 1rem' }}>{reservingItem.product_name} — ${parseInt(reservingItem.price).toLocaleString('es-CL')} /{reservingItem.unit}</p>
+                  <label style={{ fontSize: '12px', color: '#666', display: 'block', marginBottom: '6px' }}>
+                    Cantidad ({reservingItem.unit}) — máx {getBodegaRemaining(reservingItem.id)}
+                  </label>
+                  <input type="number" step="0.5" placeholder="0" value={reserveQty}
+                    onChange={e => { setReserveQty(e.target.value); setReserveErr(''); }}
+                    autoFocus
+                    style={{ width: '100%', padding: '10px', border: '2px solid #90caf9', borderRadius: '8px', fontSize: '18px', textAlign: 'center', boxSizing: 'border-box', marginBottom: '8px', outline: 'none' }} />
+                  {reserveQty && parseFloat(reserveQty) > 0 && (
+                    <div style={{ padding: '8px 12px', background: '#fff3e0', borderRadius: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '12px', color: '#555' }}>Se cargará a tu saldo</span>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#c62828' }}>−${Math.round(parseFloat(reserveQty) * reservingItem.price).toLocaleString('es-CL')}</span>
+                    </div>
+                  )}
+                  {reserveErr && <p style={{ fontSize: '12px', color: '#c62828', margin: '0 0 8px' }}>{reserveErr}</p>}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={handleReserve} disabled={reserveSaving}
+                      style={{ flex: 1, padding: '10px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '14px' }}>
+                      {reserveSaving ? 'Reservando...' : 'Confirmar'}
+                    </button>
+                    <button onClick={() => { setReservingItem(null); setReserveErr(''); }}
+                      style={{ padding: '10px 14px', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', cursor: 'pointer', fontSize: '13px' }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -529,6 +664,28 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
                 ))}
               </div>
             )}
+
+            {/* RESERVAS DE BODEGA */}
+            {myReservations.length > 0 && (
+              <div style={{ marginTop: '1rem' }}>
+                <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>🏪 Reservas de Bodega</p>
+                {myReservations.map(asn => (
+                  <div key={asn.id} style={{ padding: '0.8rem 1rem', background: '#f8fbff', border: '1px solid #90caf9', borderRadius: '8px', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <p style={{ fontSize: '13px', fontWeight: 500, margin: 0 }}>{asn.product_name}</p>
+                      <p style={{ fontSize: '11px', color: '#888', margin: '3px 0 0' }}>{asn.quantity} unidades</p>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#c62828' }}>−${asn.total_value.toLocaleString('es-CL')}</span>
+                      {!ord?.retired && (
+                        <button onClick={() => handleCancelReservation(asn)}
+                          style={{ width: '24px', height: '24px', border: '1px solid #ffcdd2', background: '#fff5f5', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', color: '#c62828', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -573,7 +730,7 @@ function FamilyApp({ user, products, sealed, sealOrderLocal, unsealOrderLocal, c
 
         {/* MI SALDO */}
         {tab === 'balance' && (
-          <SaldoFamilia user={user} ord={ord} cargo={cargo} period={period} />
+          <SaldoFamilia user={currentUser} ord={ord} cargo={cargo} period={period} />
         )}
       </div>
     </div>
@@ -733,7 +890,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
         {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
         {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
         {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
-        {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} />}
+        {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
         {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} />}
         {tab === 'productos' && <AdminProductos products={products} setProducts={setProducts} />}
         {tab === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}

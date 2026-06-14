@@ -1071,13 +1071,13 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
 
 // ─── BODEGA ───────────────────────────────────────────────────────────────────
 
-export function AdminBodega({ period, families, setFamilies }) {
+export function AdminBodega({ period, families, setFamilies, products = [] }) {
   const [items, setItems] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedItem, setExpandedItem] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const emptyForm = { product_name: '', provider: '', unit: 'Kg', price: '', quantity: '', notes: '' };
+  const emptyForm = { product_id: '', product_name: '', provider: '', unit: '', price: '', quantity: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState('');
@@ -1103,13 +1103,13 @@ export function AdminBodega({ period, families, setFamilies }) {
   };
 
   const handleAddItem = async () => {
-    if (!form.product_name.trim() || !form.price || !form.quantity) { setFormErr('Nombre, precio y cantidad son obligatorios'); return; }
+    if (!form.product_id || !form.price || !form.quantity) { setFormErr('Selecciona un producto del maestro, precio y cantidad'); return; }
     setSaving(true);
     const item = {
       id: Date.now().toString(),
-      product_name: form.product_name.trim(),
-      provider: form.provider.trim(),
-      unit: form.unit.trim() || 'un',
+      product_name: form.product_name,
+      provider: form.provider,
+      unit: form.unit || 'un',
       price: parseInt(form.price),
       quantity: parseFloat(form.quantity),
       notes: form.notes.trim(),
@@ -1211,19 +1211,21 @@ export function AdminBodega({ period, families, setFamilies }) {
           <p style={{ fontSize: '13px', fontWeight: 700, color: '#1565c0', margin: '0 0 1rem' }}>Nuevo ítem en bodega</p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Producto *</label>
-              <input type="text" placeholder="Nombre del producto" value={form.product_name} onChange={e => setForm(p => ({ ...p, product_name: e.target.value }))}
-                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Proveedor</label>
-              <input type="text" value={form.provider} onChange={e => setForm(p => ({ ...p, provider: e.target.value }))}
-                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Unidad</label>
-              <input type="text" placeholder="Kg, un, 500gr..." value={form.unit} onChange={e => setForm(p => ({ ...p, unit: e.target.value }))}
-                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Producto del maestro *</label>
+              <select value={form.product_id} onChange={e => {
+                const prod = products.find(p => p.id === parseInt(e.target.value));
+                if (prod) setForm(prev => ({ ...prev, product_id: prod.id, product_name: prod.name, provider: prod.provider || '', unit: prod.unit }));
+                else setForm(prev => ({ ...prev, product_id: '', product_name: '', provider: '', unit: '' }));
+              }}
+              style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px' }}>
+                <option value="">Seleccionar producto...</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name} — {p.unit}</option>)}
+              </select>
+              {form.product_id && (
+                <p style={{ fontSize: '11px', color: '#888', margin: '4px 0 0' }}>
+                  {form.provider && `${form.provider} · `}Unidad: {form.unit}
+                </p>
+              )}
             </div>
             <div>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Precio por unidad CLP *</label>
