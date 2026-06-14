@@ -1081,6 +1081,8 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState('');
+  const [productSearch, setProductSearch] = useState('');
+  const [showProductDrop, setShowProductDrop] = useState(false);
   const [assigningItem, setAssigningItem] = useState(null);
   const [assignForm, setAssignForm] = useState({ family_id: '', quantity: '' });
   const [assignSaving, setAssignSaving] = useState(false);
@@ -1116,7 +1118,7 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
       period_id: period.id,
     };
     const result = await addBodegaItem(item);
-    if (result) { setItems(p => [...p, result]); setForm(emptyForm); setShowForm(false); setFormErr(''); }
+    if (result) { setItems(p => [...p, result]); setForm(emptyForm); setShowForm(false); setFormErr(''); setProductSearch(''); setShowProductDrop(false); }
     else { setFormErr('Error al guardar'); }
     setSaving(false);
   };
@@ -1210,25 +1212,52 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
         <div style={{ background: 'white', border: '1px solid #90caf9', borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem' }}>
           <p style={{ fontSize: '13px', fontWeight: 700, color: '#1565c0', margin: '0 0 1rem' }}>Nuevo ítem en bodega</p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-            <div style={{ gridColumn: 'span 2' }}>
+            <div style={{ gridColumn: 'span 2', position: 'relative' }}>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Producto del maestro *</label>
-              <select value={form.product_id} onChange={e => {
-                const prod = products.find(p => p.id === parseInt(e.target.value));
-                if (prod) setForm(prev => ({ ...prev, product_id: prod.id, product_name: prod.name, provider: prod.provider || '', unit: prod.unit }));
-                else setForm(prev => ({ ...prev, product_id: '', product_name: '', provider: '', unit: '' }));
-              }}
-              style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px' }}>
-                <option value="">Seleccionar producto...</option>
-                {products.map(p => <option key={p.id} value={p.id}>{p.name} — {p.unit}</option>)}
-              </select>
+              {form.product_id ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ flex: 1, padding: '7px 10px', border: '1px solid #4CAF50', borderRadius: '6px', background: '#f0f7f0', fontSize: '13px', color: '#2d5a2d', fontWeight: 500 }}>
+                    ✓ {form.product_name} — {form.unit}
+                  </div>
+                  <button type="button" onClick={() => setForm(prev => ({ ...prev, product_id: '', product_name: '', provider: '', unit: '', price: '' }))}
+                    style={{ padding: '6px 10px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', color: '#666', whiteSpace: 'nowrap' }}>
+                    Cambiar
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input type="text" placeholder="Buscar producto del maestro..." value={productSearch}
+                    onChange={e => { setProductSearch(e.target.value); setShowProductDrop(true); }}
+                    onFocus={() => setShowProductDrop(true)}
+                    onBlur={() => setTimeout(() => setShowProductDrop(false), 150)}
+                    style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+                  {showProductDrop && (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.10)', zIndex: 100, maxHeight: '200px', overflowY: 'auto' }}>
+                      {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).map(p => (
+                        <div key={p.id} onMouseDown={() => {
+                          setForm(prev => ({ ...prev, product_id: p.id, product_name: p.name, provider: p.provider || '', unit: p.unit, price: p.price.toString() }));
+                          setProductSearch(''); setShowProductDrop(false);
+                        }}
+                        style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontWeight: 500 }}>{p.name}</span>
+                          <span style={{ color: '#888', fontSize: '11px' }}>{p.unit} · ${p.price.toLocaleString('es-CL')}</span>
+                        </div>
+                      ))}
+                      {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
+                        <div style={{ padding: '10px', textAlign: 'center', color: '#aaa', fontSize: '12px' }}>Sin resultados</div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
               {form.product_id && (
                 <p style={{ fontSize: '11px', color: '#888', margin: '4px 0 0' }}>
-                  {form.provider && `${form.provider} · `}Unidad: {form.unit}
+                  {form.provider && `${form.provider} · `}Precio del maestro: ${parseInt(form.price || 0).toLocaleString('es-CL')} /{form.unit}
                 </p>
               )}
             </div>
             <div>
-              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Precio por unidad CLP *</label>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Precio por unidad CLP * <span style={{ fontWeight: 400, fontStyle: 'italic' }}>(del maestro, editable)</span></label>
               <input type="number" placeholder="0" value={form.price} onChange={e => setForm(p => ({ ...p, price: e.target.value }))}
                 style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
             </div>
@@ -1255,7 +1284,7 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
               style={{ flex: 1, padding: '8px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>
               {saving ? 'Guardando...' : '+ Agregar a bodega'}
             </button>
-            <button onClick={() => { setShowForm(false); setFormErr(''); }}
+            <button onClick={() => { setShowForm(false); setFormErr(''); setProductSearch(''); setShowProductDrop(false); }}
               style={{ padding: '8px 14px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>Cancelar</button>
           </div>
         </div>
