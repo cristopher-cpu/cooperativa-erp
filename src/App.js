@@ -5,7 +5,7 @@ import {
   getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
 } from './supabaseClient';
 import './App.css';
-import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega } from './AdminComponents';
+import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs } from './AdminComponents';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -825,6 +825,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
     { id: 'productos', l: 'Productos', ic: '🏷️' },
     { id: 'saldos', l: 'Saldos', ic: '💳' },
     { id: 'periodo', l: 'Período', ic: '📅' },
+    { id: 'actividad', l: 'Actividad', ic: '📝' },
   ];
 
   if (hacerPedidoFam) {
@@ -891,10 +892,11 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
         {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
         {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
         {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
-        {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} />}
+        {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
         {tab === 'productos' && <AdminProductos products={products} setProducts={setProducts} />}
         {tab === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
-        {tab === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} />}
+        {tab === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} currentAdmin={user} />}
+        {tab === 'actividad' && <AdminLogs />}
       </div>
     </div>
   );

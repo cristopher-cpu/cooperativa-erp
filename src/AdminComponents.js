@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -572,9 +572,9 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
 
 // ─── FAMILIAS ─────────────────────────────────────────────────────────────────
 
-export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) {
+export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, currentAdmin }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', balance: '0' });
+  const [form, setForm] = useState({ name: '', email: '', balance: '0', role: 'familia' });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [srch, setSrch] = useState('');
@@ -591,13 +591,22 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
       name: form.name.trim(),
       initials: form.name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase(),
       balance: parseInt(form.balance) || 0,
-      role: 'familia',
+      role: form.role,
       email: form.email.trim()
     };
     const result = await addFamily(newFamily);
     if (result) {
       setFamilies(p => [...p, newFamily]);
-      setForm({ name: '', email: '', balance: '0' });
+      if (currentAdmin) {
+        addAdminLog({
+          id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.name,
+          action: 'created_family',
+          details: `${form.role === 'admin' ? 'Nuevo administrador' : 'Nueva familia'}: ${form.name.trim()}`
+        });
+      }
+      setForm({ name: '', email: '', balance: '0', role: 'familia' });
       setErr('');
       setShowForm(false);
     } else {
@@ -620,14 +629,50 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
     setFamilies(p => p.map(f => f.id === fid ? { ...f, pin: null } : f));
   };
 
-  const na = families.filter(f => f.role === 'familia');
-  const filtered = na.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
+  const admins = families.filter(f => f.role === 'admin');
+  const fams = families.filter(f => f.role === 'familia');
+  const filtered = fams.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
+
+  const renderPinRow = (f) => (
+    <div style={{ padding: '0.5rem 1rem', background: '#f9fafb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>
+      {pinEditId === f.id ? (
+        <>
+          <input type="text" inputMode="numeric" maxLength={6} placeholder="Ingresa PIN numérico" value={pinVal}
+            onChange={e => setPinVal(e.target.value.replace(/[^0-9]/g, ''))}
+            style={{ flex: 1, padding: '4px 8px', border: '1px solid #4CAF50', borderRadius: '5px', fontSize: '12px' }} />
+          <button onClick={() => savePinFor(f.id)} disabled={pinSaving}
+            style={{ padding: '3px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
+            {pinSaving ? '...' : '✓'}
+          </button>
+          <button onClick={() => { setPinEditId(null); setPinVal(''); }}
+            style={{ padding: '3px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+        </>
+      ) : (
+        <>
+          <span style={{ fontSize: '11px', color: f.pin ? '#2e7d32' : '#aaa', fontWeight: f.pin ? 600 : 400 }}>
+            {f.pin ? `PIN configurado (${f.pin.length} dígitos)` : 'Sin PIN — acceso libre'}
+          </span>
+          <button onClick={() => { setPinEditId(f.id); setPinVal(f.pin || ''); }}
+            style={{ marginLeft: 'auto', padding: '2px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#555' }}>
+            {f.pin ? 'Cambiar' : 'Asignar PIN'}
+          </button>
+          {f.pin && (
+            <button onClick={() => clearPinFor(f.id)}
+              style={{ padding: '2px 8px', background: '#fff5f5', border: '1px solid #ffcdd2', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#c62828' }}>
+              Quitar
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-        <p style={{ fontSize: '13px', fontWeight: 500, color: '#666', margin: 0 }}>{na.length} familias registradas</p>
-        {!showForm && <button onClick={() => setShowForm(true)} style={{ padding: '6px 14px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>+ Nueva familia</button>}
+        <p style={{ fontSize: '13px', fontWeight: 500, color: '#666', margin: 0 }}>{fams.length} familias · {admins.length} admins</p>
+        {!showForm && <button onClick={() => setShowForm(true)} style={{ padding: '6px 14px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>+ Nuevo miembro</button>}
       </div>
 
       <input type="text" placeholder="Buscar familia por nombre..." value={srch} onChange={e => setSrch(e.target.value)}
@@ -635,7 +680,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
 
       {showForm && (
         <div style={{ padding: '1rem', background: 'white', border: '1px solid #c8e6c9', borderRadius: '8px', marginBottom: '1rem' }}>
-          <p style={{ fontWeight: 600, fontSize: '14px', color: '#2e7d32', margin: '0 0 1rem' }}>Nueva familia</p>
+          <p style={{ fontWeight: 600, fontSize: '14px', color: '#2e7d32', margin: '0 0 1rem' }}>Nuevo miembro</p>
           <div style={{ display: 'grid', gap: '10px', marginBottom: '1rem' }}>
             {[{ k: 'name', l: 'Nombre completo *', t: 'text', ph: 'Ej: Familia González' }, { k: 'email', l: 'Correo electrónico *', t: 'email', ph: 'correo@ejemplo.com' }, { k: 'balance', l: 'Saldo inicial', t: 'number', ph: '0' }].map(f => (
               <div key={f.k}>
@@ -644,15 +689,48 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
                   style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', boxSizing: 'border-box' }} />
               </div>
             ))}
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Rol *</label>
+              <select value={form.role} onChange={e => setForm(p => ({ ...p, role: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: `1px solid ${form.role === 'admin' ? '#90caf9' : '#dde8dd'}`, borderRadius: '6px', fontSize: '13px', background: form.role === 'admin' ? '#f8fbff' : 'white' }}>
+                <option value="familia">Familia (solo pedidos)</option>
+                <option value="admin">Administrador (acceso total)</option>
+              </select>
+              {form.role === 'admin' && (
+                <p style={{ fontSize: '11px', color: '#1565c0', margin: '4px 0 0' }}>Este usuario tendrá acceso al panel de administración completo.</p>
+              )}
+            </div>
           </div>
           {err && <p style={{ fontSize: '12px', color: '#c62828', margin: '0 0 10px' }}>{err}</p>}
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={handleAdd} disabled={loading} style={{ flex: 1, padding: '7px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>{loading ? 'Guardando...' : 'Agregar'}</button>
+            <button onClick={handleAdd} disabled={loading} style={{ flex: 1, padding: '7px', background: form.role === 'admin' ? '#1565c0' : '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>{loading ? 'Guardando...' : 'Agregar'}</button>
             <button onClick={() => { setShowForm(false); setErr(''); }} style={{ flex: 1, padding: '7px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>Cancelar</button>
           </div>
         </div>
       )}
 
+      {admins.length > 0 && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>Administradores</p>
+          {admins.map(f => (
+            <div key={f.id} style={{ background: 'white', border: '1.5px solid #90caf9', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
+              <div style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#1565c0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
+                    <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
+                  </div>
+                </div>
+                <span style={{ fontSize: '9px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: '#1565c0', color: 'white', flexShrink: 0 }}>ADMIN</span>
+              </div>
+              {renderPinRow(f)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p style={{ fontSize: '11px', fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>Familias ({fams.length})</p>
       {filtered.map(f => (
         <div key={f.id} style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
           <div style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -676,40 +754,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido }) 
               {f.balance !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : ''}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
             </div>
           </div>
-
-          {/* PIN management */}
-          <div style={{ padding: '0.5rem 1rem', background: '#f9fafb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>
-            {pinEditId === f.id ? (
-              <>
-                <input type="text" inputMode="numeric" maxLength={6} placeholder="Ingresa PIN numérico" value={pinVal}
-                  onChange={e => setPinVal(e.target.value.replace(/[^0-9]/g, ''))}
-                  style={{ flex: 1, padding: '4px 8px', border: '1px solid #4CAF50', borderRadius: '5px', fontSize: '12px' }} />
-                <button onClick={() => savePinFor(f.id)} disabled={pinSaving}
-                  style={{ padding: '3px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
-                  {pinSaving ? '...' : '✓'}
-                </button>
-                <button onClick={() => { setPinEditId(null); setPinVal(''); }}
-                  style={{ padding: '3px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '11px' }}>✕</button>
-              </>
-            ) : (
-              <>
-                <span style={{ fontSize: '11px', color: f.pin ? '#2e7d32' : '#aaa', fontWeight: f.pin ? 600 : 400 }}>
-                  {f.pin ? `PIN configurado (${f.pin.length} dígitos)` : 'Sin PIN — acceso libre'}
-                </span>
-                <button onClick={() => { setPinEditId(f.id); setPinVal(f.pin || ''); }}
-                  style={{ marginLeft: 'auto', padding: '2px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#555' }}>
-                  {f.pin ? 'Cambiar' : 'Asignar PIN'}
-                </button>
-                {f.pin && (
-                  <button onClick={() => clearPinFor(f.id)}
-                    style={{ padding: '2px 8px', background: '#fff5f5', border: '1px solid #ffcdd2', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#c62828' }}>
-                    Quitar
-                  </button>
-                )}
-              </>
-            )}
-          </div>
+          {renderPinRow(f)}
         </div>
       ))}
     </div>
@@ -835,7 +880,7 @@ export function AdminProductos({ products, setProducts }) {
 
 // ─── PERÍODO ──────────────────────────────────────────────────────────────────
 
-export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
+export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, currentAdmin }) {
   const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '' });
   const [loading, setLoading] = useState(false);
   const [dateErr, setDateErr] = useState('');
@@ -848,10 +893,31 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
   const [createLabel, setCreateLabel] = useState('');
   const [createMonth, setCreateMonth] = useState('');
   const [createMsg, setCreateMsg] = useState('');
+  const [pastPeriods, setPastPeriods] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [expandedHistory, setExpandedHistory] = useState(null);
 
   const na = families.filter(f => f.role === 'familia');
   const sc = Object.keys(sealed).length;
   const pct = na.length > 0 ? Math.round(sc / na.length * 100) : 0;
+
+  useEffect(() => {
+    if (!showHistory) return;
+    setLoadingHistory(true);
+    getPastPeriods().then(data => { setPastPeriods(data); setLoadingHistory(false); });
+  }, [showHistory]);
+
+  const logAction = (action, details) => {
+    if (!currentAdmin) return;
+    addAdminLog({
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      admin_id: currentAdmin.id,
+      admin_name: currentAdmin.name,
+      action,
+      details
+    });
+  };
 
   // ── No active period: show create form ──────────────────────────────────────
   if (!period) {
@@ -895,6 +961,7 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
               const result = await createPeriod(newPeriod);
               if (result && result.id) {
                 setPeriod(result);
+                logAction('period_created', `Período creado: ${createLabel.trim()}`);
               } else {
                 setCreateMsg(result?.error || 'Error al crear el período. Revisa la consola.');
               }
@@ -932,12 +999,31 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
     };
     await updatePeriod(period.id, clean);
     setPeriod(p => ({ ...p, ...clean }));
+    logAction('period_dates_updated', `Fechas actualizadas en período: ${period.label} — Apertura: ${clean.date_from || 'N/A'}, Cierre: ${clean.date_to || 'N/A'}, Entrega: ${clean.date_delivery || 'N/A'}`);
     setLoading(false);
   };
 
   const handleClosePeriod = async () => {
     if (!newLabel.trim()) { setCloseMsg('Ingresa un nombre para el nuevo período'); return; }
     setClosing(true);
+
+    const totalValue = Object.values(sealed).reduce((s, o) => s + o.total + cargo, 0);
+    const summary = {
+      period_label: period.label,
+      families_count: na.length,
+      sealed_count: sc,
+      total_value: totalValue,
+      cargo,
+      families: na.map(f => {
+        const ord = sealed[f.id];
+        return {
+          name: f.name,
+          balance_before: f.balance || 0,
+          had_order: !!ord,
+          order_total: ord ? ord.total + cargo : 0
+        };
+      })
+    };
 
     for (const f of na) {
       const ord = sealed[f.id];
@@ -959,8 +1045,9 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
       date_delivery: null
     };
 
-    const result = await closePeriod(period.id, newPeriod);
+    const result = await closePeriod(period.id, newPeriod, summary);
     if (result && result.id) {
+      logAction('period_closed', `Período cerrado: ${period.label} → Nuevo: ${newLabel.trim()} (${sc} pedidos, total $${totalValue.toLocaleString('es-CL')})`);
       setPeriod(result);
       setShowClose(false);
       setCloseMsg('');
@@ -1018,6 +1105,81 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
         </button>
       </div>
 
+      {/* Historial de períodos */}
+      <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1.25rem', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showHistory ? '1rem' : 0 }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#333', margin: 0 }}>Historial de períodos anteriores</p>
+          <button onClick={() => setShowHistory(h => !h)}
+            style={{ padding: '5px 12px', background: showHistory ? '#f5f5f5' : '#e3f2fd', color: showHistory ? '#555' : '#1565c0', border: `1px solid ${showHistory ? '#dde8dd' : '#90caf9'}`, borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
+            {showHistory ? 'Ocultar' : 'Ver historial'}
+          </button>
+        </div>
+        {showHistory && (
+          loadingHistory ? <p style={{ color: '#888', fontSize: '13px', margin: 0 }}>Cargando...</p> :
+          pastPeriods.length === 0 ? <p style={{ color: '#aaa', fontSize: '13px', margin: 0 }}>No hay períodos anteriores registrados.</p> :
+          pastPeriods.map(pp => {
+            const sum = pp.summary ? (() => { try { return JSON.parse(pp.summary); } catch { return null; } })() : null;
+            const isExp = expandedHistory === pp.id;
+            return (
+              <div key={pp.id} style={{ border: '1px solid #e0e0e0', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
+                <div onClick={() => setExpandedHistory(isExp ? null : pp.id)} style={{ padding: '0.9rem 1rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fafafa' }}>
+                  <div>
+                    <p style={{ fontSize: '14px', fontWeight: 700, margin: 0, color: '#333' }}>{pp.label}</p>
+                    <p style={{ fontSize: '11px', color: '#888', margin: '3px 0 0' }}>
+                      Cerrado: {pp.closed_at ? new Date(pp.closed_at).toLocaleString('es-CL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Sin fecha'}
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {sum && <span style={{ fontSize: '12px', fontWeight: 600, color: '#2e7d32' }}>${sum.total_value?.toLocaleString('es-CL')}</span>}
+                    <span style={{ fontSize: '11px', color: '#888' }}>{isExp ? '▲' : '▼'}</span>
+                  </div>
+                </div>
+                {isExp && sum && (
+                  <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid #f0f0f0', background: 'white' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '1rem' }}>
+                      {[
+                        { l: 'Familias', v: sum.families_count },
+                        { l: 'Con pedido', v: sum.sealed_count },
+                        { l: 'Total recaudado', v: '$' + sum.total_value?.toLocaleString('es-CL') }
+                      ].map(m => (
+                        <div key={m.l} style={{ padding: '0.6rem', background: '#f5f5f5', borderRadius: '6px', textAlign: 'center' }}>
+                          <p style={{ fontSize: '10px', color: '#888', margin: 0 }}>{m.l}</p>
+                          <p style={{ fontSize: '14px', fontWeight: 700, margin: '2px 0 0', color: '#333' }}>{m.v}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {sum.families && sum.families.length > 0 && (
+                      <div>
+                        <p style={{ fontSize: '11px', fontWeight: 600, color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 6px' }}>Detalle por familia</p>
+                        {sum.families.map((fh, i) => (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f5f5f5', fontSize: '12px' }}>
+                            <span style={{ fontWeight: 500, color: '#333' }}>{fh.name}</span>
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                              {fh.had_order
+                                ? <span style={{ color: '#1565c0' }}>Pedido: ${fh.order_total?.toLocaleString('es-CL')}</span>
+                                : <span style={{ color: '#aaa' }}>Sin pedido</span>
+                              }
+                              <span style={{ color: fh.balance_before >= 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>
+                                Saldo prev.: {fh.balance_before >= 0 ? '+' : ''}${fh.balance_before?.toLocaleString('es-CL')}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {isExp && !sum && (
+                  <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid #f0f0f0', background: 'white' }}>
+                    <p style={{ color: '#aaa', fontSize: '12px', margin: 0 }}>Este período no tiene resumen guardado (fue cerrado antes de esta función).</p>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
       {/* Cerrar período */}
       <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #ffcdd2', padding: '1.25rem' }}>
         <p style={{ fontSize: '13px', fontWeight: 700, color: '#c62828', margin: '0 0 6px' }}>Cerrar período</p>
@@ -1065,6 +1227,74 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── ACTIVIDAD / LOGS ─────────────────────────────────────────────────────────
+
+export function AdminLogs() {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterAction, setFilterAction] = useState('todos');
+
+  useEffect(() => {
+    getAdminLogs().then(data => { setLogs(data); setLoading(false); });
+  }, []);
+
+  const actionConfig = {
+    created_family:       { label: 'Nuevo miembro',      bg: '#e8f5e9', color: '#2e7d32', ic: '👤' },
+    period_dates_updated: { label: 'Fechas actualizadas', bg: '#e3f2fd', color: '#1565c0', ic: '📅' },
+    period_closed:        { label: 'Período cerrado',     bg: '#fff3e0', color: '#e65100', ic: '🔒' },
+    period_created:       { label: 'Período creado',      bg: '#e8f5e9', color: '#2e7d32', ic: '✅' },
+  };
+
+  const filtered = filterAction === 'todos' ? logs : logs.filter(l => l.action === filterAction);
+
+  if (loading) return <p style={{ color: '#888', fontSize: '13px' }}>Cargando actividad...</p>;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        {['todos', 'created_family', 'period_dates_updated', 'period_closed', 'period_created'].map(k => {
+          const cfg = k === 'todos' ? null : actionConfig[k];
+          const active = filterAction === k;
+          return (
+            <button key={k} onClick={() => setFilterAction(k)}
+              style={{ padding: '5px 12px', borderRadius: '20px', border: '1px solid', cursor: 'pointer', fontSize: '11px', fontWeight: active ? 700 : 400, background: active ? (cfg ? cfg.color : '#333') : 'white', borderColor: active ? (cfg ? cfg.color : '#333') : '#dde8dd', color: active ? 'white' : '#555', whiteSpace: 'nowrap' }}>
+              {cfg ? `${cfg.ic} ${cfg.label}` : `Todos (${logs.length})`}
+            </button>
+          );
+        })}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '3rem', background: 'white', borderRadius: '10px', border: '1px solid #dde8dd' }}>
+          <p style={{ fontSize: '28px', margin: 0 }}>📝</p>
+          <p style={{ color: '#aaa', fontSize: '13px', margin: '1rem 0 0' }}>Sin actividad registrada aún</p>
+        </div>
+      ) : (
+        filtered.map(log => {
+          const cfg = actionConfig[log.action] || { label: log.action, bg: '#f5f5f5', color: '#888', ic: '•' };
+          return (
+            <div key={log.id} style={{ background: 'white', border: '1px solid #f0f0f0', borderRadius: '8px', padding: '0.8rem 1rem', marginBottom: '6px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: '18px', flexShrink: 0, marginTop: '1px' }}>{cfg.ic}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px', background: cfg.bg, color: cfg.color }}>{cfg.label}</span>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#333' }}>{log.admin_name}</span>
+                  </div>
+                  <span style={{ fontSize: '10px', color: '#aaa', whiteSpace: 'nowrap' }}>
+                    {new Date(log.created_at).toLocaleString('es-CL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                {log.details && <p style={{ fontSize: '12px', color: '#555', margin: '4px 0 0' }}>{log.details}</p>}
+              </div>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }

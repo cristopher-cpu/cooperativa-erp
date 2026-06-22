@@ -119,10 +119,12 @@ export async function updatePeriod(periodId, updates) {
   return data;
 }
 
-export async function closePeriod(periodId, newPeriodData) {
+export async function closePeriod(periodId, newPeriodData, periodSummary = null) {
+  const closeUpdates = { active: false, closed_at: new Date().toISOString() };
+  if (periodSummary !== null) closeUpdates.summary = typeof periodSummary === 'string' ? periodSummary : JSON.stringify(periodSummary);
   const { error: closeErr } = await supabase
     .from('periods')
-    .update({ active: false })
+    .update(closeUpdates)
     .eq('id', periodId);
   if (closeErr) {
     console.error('closePeriod (close) error:', closeErr.message);
@@ -140,6 +142,24 @@ export async function closePeriod(periodId, newPeriodData) {
     return { error: createErr.message };
   }
   return data;
+}
+
+export async function addAdminLog(log) {
+  const { data, error } = await supabase.from('admin_logs').insert([log]).select().single();
+  if (error) console.error('addAdminLog error:', error.message);
+  return data;
+}
+
+export async function getAdminLogs() {
+  const { data, error } = await supabase.from('admin_logs').select('*').order('created_at', { ascending: false }).limit(200);
+  if (error) { console.error('getAdminLogs error:', error.message); return []; }
+  return data || [];
+}
+
+export async function getPastPeriods() {
+  const { data, error } = await supabase.from('periods').select('*').eq('active', false).order('closed_at', { ascending: false });
+  if (error) { console.error('getPastPeriods error:', error.message); return []; }
+  return data || [];
 }
 
 export async function createPeriod(periodData) {
