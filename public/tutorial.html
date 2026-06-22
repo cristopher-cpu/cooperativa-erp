@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tutorial — Cooperativa de Compras</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f0f7f0;
+      color: #222;
+      line-height: 1.6;
+    }
+
+    /* ── Header ── */
+    .site-header {
+      background: white;
+      border-bottom: 3px solid #4CAF50;
+      padding: 2rem 1.5rem 1.5rem;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    }
+    .site-header .icon { font-size: 52px; margin-bottom: 10px; display: block; }
+    .site-header h1 { font-size: 28px; color: #2d5a2d; margin-bottom: 6px; }
+    .site-header p { color: #666; font-size: 15px; }
+
+    /* ── Layout ── */
+    .container { max-width: 820px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+
+    /* ── TOC ── */
+    .toc {
+      background: white;
+      border-radius: 12px;
+      border: 1px solid #c8e6c9;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .toc h2 { font-size: 14px; color: #2e7d32; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 1rem; }
+    .toc-section { margin-bottom: 0.5rem; }
+    .toc-section a { font-size: 14px; color: #1565c0; text-decoration: none; font-weight: 500; }
+    .toc-section a:hover { text-decoration: underline; }
+    .toc-sub { margin-left: 1.2rem; margin-top: 2px; }
+    .toc-sub a { font-size: 13px; color: #555; font-weight: 400; }
+
+    /* ── Sections ── */
+    .part-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 1.25rem 1.5rem;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+      margin-top: 2.5rem;
+    }
+    .part-header.familia { background: #2e7d32; color: white; }
+    .part-header.admin   { background: #1565c0; color: white; }
+    .part-header .part-icon { font-size: 32px; }
+    .part-header h2 { font-size: 22px; font-weight: 700; }
+    .part-header p { font-size: 13px; opacity: 0.85; margin-top: 2px; }
+
+    .section {
+      background: white;
+      border-radius: 10px;
+      border: 1px solid #e0e0e0;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .section h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #2d5a2d;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section.admin-sec h3 { color: #1565c0; }
+    .section h4 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 1.25rem 0 0.6rem;
+    }
+    .section p { font-size: 14px; color: #444; margin-bottom: 0.6rem; }
+    .section ul, .section ol {
+      padding-left: 1.4rem;
+      font-size: 14px;
+      color: #444;
+    }
+    .section li { margin-bottom: 4px; }
+
+    /* ── Steps ── */
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li {
+      counter-increment: step;
+      display: flex;
+      gap: 12px;
+      margin-bottom: 10px;
+      align-items: flex-start;
+    }
+    .steps li::before {
+      content: counter(step);
+      background: #4CAF50;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .admin-sec .steps li::before { background: #1565c0; }
+
+    /* ── Tips ── */
+    .tip {
+      background: #fff8e1;
+      border: 1px solid #ffe082;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #555;
+      margin: 0.75rem 0;
+      display: flex;
+      gap: 8px;
+    }
+    .tip.info { background: #e3f2fd; border-color: #90caf9; }
+    .tip.success { background: #e8f5e9; border-color: #81c784; }
+    .tip-icon { flex-shrink: 0; font-size: 16px; }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      vertical-align: middle;
+    }
+    .badge.green { background: #e8f5e9; color: #2e7d32; }
+    .badge.blue  { background: #e3f2fd; color: #1565c0; }
+    .badge.red   { background: #ffebee; color: #c62828; }
+    .badge.orange{ background: #fff3e0; color: #e65100; }
+
+    /* ── Table ── */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0.75rem 0; }
+    th { background: #f0f7f0; color: #2e7d32; padding: 8px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; color: #444; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── Screen mock ── */
+    .screen {
+      background: #f8f9fa;
+      border: 1.5px solid #dde8dd;
+      border-radius: 10px;
+      padding: 12px;
+      margin: 0.75rem 0;
+      font-size: 12px;
+    }
+    .screen-bar {
+      background: white;
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border: 1px solid #f0f0f0;
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    /* ── Print ── */
+    @media print {
+      body { background: white; }
+      .container { padding: 0; max-width: none; }
+      .part-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .section { break-inside: avoid; }
+    }
+
+    @media (max-width: 600px) {
+      .site-header h1 { font-size: 22px; }
+      .part-header h2 { font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="site-header">
+  <span class="icon">🛒</span>
+  <h1>Cooperativa de Compras</h1>
+  <p>Guía de uso para familias y administradores</p>
+</div>
+
+<div class="container">
+
+  <!-- ═══ TABLA DE CONTENIDOS ═══ -->
+  <div class="toc">
+    <h2>Contenidos</h2>
+    <div class="toc-section">
+      <a href="#parte-familias">Parte 1 — Para Familias</a>
+      <div class="toc-sub">
+        <a href="#login">Cómo ingresar al sistema</a> ·
+        <a href="#catalogo">Explorar el catálogo</a> ·
+        <a href="#pedido">Hacer y sellar mi pedido</a> ·
+        <a href="#bodega">Reservar de la bodega</a> ·
+        <a href="#saldo">Ver mi saldo</a> ·
+        <a href="#fechas">Consultar fechas importantes</a>
+      </div>
+    </div>
+    <div class="toc-section" style="margin-top:0.5rem">
+      <a href="#parte-admin">Parte 2 — Para Administradores</a>
+      <div class="toc-sub">
+        <a href="#admin-dashboard">Resumen</a> ·
+        <a href="#admin-pedidos">Pedidos</a> ·
+        <a href="#admin-retiros">Retiros</a> ·
+        <a href="#admin-flujo">Flujo de Caja</a> ·
+        <a href="#admin-bodega">Bodega</a> ·
+        <a href="#admin-familias">Familias</a> ·
+        <a href="#admin-productos">Productos</a> ·
+        <a href="#admin-saldos">Saldos</a> ·
+        <a href="#admin-periodo">Período</a> ·
+        <a href="#admin-actividad">Actividad</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ PARTE 1: FAMILIAS ═══ -->
+  <div class="part-header familia" id="parte-familias">
+    <div class="part-icon">👨‍👩‍👧</div>
+    <div>
+      <h2>Parte 1 — Para Familias</h2>
+      <p>Todo lo que necesitas saber para hacer tus pedidos y revisar tu saldo</p>
+    </div>
+  </div>
+
+  <!-- LOGIN -->
+  <div class="section" id="login">
+    <h3>🔐 Cómo ingresar al sistema</h3>
+    <p>
+      Al abrir la app verás la pantalla de inicio con dos secciones: <strong>Administración</strong> y <strong>Familias</strong>.
+      Busca tu nombre o el de tu familia y haz clic.
+    </p>
+    <ol class="steps">
+      <li>Busca tu nombre en la lista de <strong>Familias</strong> y haz clic en él.</li>
+      <li>Si tienes PIN configurado, ingresa los dígitos y presiona <em>Entrar</em>. Si no tienes PIN, el acceso es directo.</li>
+      <li>Listo — ya estás dentro de tu panel familiar.</li>
+    </ol>
+    <div class="tip">
+      <span class="tip-icon">🔒</span>
+      <span>Si quieres configurar un PIN de seguridad para tu cuenta, contacta a un administrador — ellos pueden asignártelo desde el panel.</span>
+    </div>
+  </div>
+
+  <!-- CATÁLOGO -->
+  <div class="section" id="catalogo">
+    <h3>📦 Explorar el catálogo</h3>
+    <p>Aquí encontrarás todos los productos disponibles para el período actual.</p>
+
+    <h4>Filtros disponibles</h4>
+    <ul>
+      <li><strong>Buscador:</strong> Escribe el nombre de un producto o proveedor para filtrarlo rápidamente.</li>
+      <li><strong>Categorías:</strong> Usa los botones de categoría (Cereales, Legumbres, Aceites…) para ver solo ese tipo de productos.</li>
+    </ul>
+
+    <h4>Información en cada tarjeta</h4>
+    <table>
+      <tr><th>Campo</th><th>Significado</th></tr>
+      <tr><td><span class="badge green">✓ Disponible</span></td><td>El producto tiene stock y puedes pedirlo</td></tr>
+      <tr><td><span class="badge red">Sin stock</span></td><td>No disponible en este período</td></tr>
+      <tr><td>Unidad</td><td>Kg, 500 gr, unidad, etc.</td></tr>
+      <tr><td>Proveedor</td><td>De dónde proviene el producto</td></tr>
+      <tr><td>Precio</td><td>Precio por unidad en pesos chilenos</td></tr>
+    </table>
+
+    <div class="tip info">
+      <span class="tip-icon">ℹ️</span>
+      <span>Al final del catálogo también aparece una sección <strong>🏪 Bodega</strong> con productos disponibles para reserva directa (ver más abajo).</span>
+    </div>
+  </div>
+
+  <!-- PEDIDO -->
+  <div class="section" id="pedido">
+    <h3>🛒 Hacer y sellar mi pedido</h3>
+
+    <h4>Agregar productos al carrito</h4>
+    <ol class="steps">
+      <li>En la pestaña <strong>Catálogo</strong>, haz clic en <strong>+ Agregar</strong> en el producto que quieres.</li>
+      <li>Usa los botones <strong>+</strong> y <strong>−</strong> para ajustar la cantidad.</li>
+      <li>El ícono del carrito en la parte superior muestra cuántos ítems llevas.</li>
+    </ol>
+
+    <h4>Sellar el pedido</h4>
+    <ol class="steps">
+      <li>Ve a la pestaña <strong>Mi Pedido 🛒</strong>.</li>
+      <li>Revisa todos los productos, cantidades y el total (incluye el cargo fijo).</li>
+      <li>Haz clic en <strong>🔒 Sellar Pedido</strong> y confirma.</li>
+    </ol>
+
+    <div class="tip success">
+      <span class="tip-icon">✅</span>
+      <span><strong>¿Puedo cambiar mi pedido después de sellarlo?</strong> Sí, mientras el período esté abierto puedes hacer clic en <em>Modificar</em> para editar tu pedido y volver a sellarlo.</span>
+    </div>
+
+    <h4>Estados del pedido</h4>
+    <table>
+      <tr><th>Estado</th><th>Qué significa</th></tr>
+      <tr><td><span class="badge blue">✓ Pedido sellado</span></td><td>Tu pedido está confirmado, esperando entrega</td></tr>
+      <tr><td><span class="badge green">✓ Pedido entregado</span></td><td>El pedido fue marcado como retirado por el admin</td></tr>
+      <tr><td><em>Sin sellar</em></td><td>Tienes ítems en el carrito pero no has confirmado</td></tr>
+    </table>
+
+    <div class="tip">
+      <span class="tip-icon">⏰</span>
+      <span>El sistema te avisará cuando quede 1 día o menos para el cierre de pedidos o para la fecha de entrega.</span>
+    </div>
+  </div>
+
+  <!-- BODEGA -->
+  <div class="section" id="bodega">
+    <h3>🏪 Reservar productos de la bodega</h3>
+    <p>
+      Además del catálogo regular, los administradores pueden poner productos disponibles en la <strong>Bodega</strong>.
+      Estos productos se reservan directamente y se cargan a tu saldo.
+    </p>
+
+    <ol class="steps">
+      <li>Al final del catálogo, verás la sección <strong>🏪 Productos disponibles en Bodega</strong> (solo aparece si hay stock).</li>
+      <li>Haz clic en <strong>+ Reservar</strong> en el producto que te interesa.</li>
+      <li>Ingresa la cantidad que necesitas (no puede superar el stock disponible).</li>
+      <li>El sistema mostrará cuánto se cargará a tu saldo. Confirma para completar la reserva.</li>
+    </ol>
+
+    <h4>Ver y cancelar mis reservas</h4>
+    <p>En la pestaña <strong>Mi Pedido</strong>, al final verás la sección <strong>🏪 Reservas de Bodega</strong>. Puedes cancelar una reserva haciendo clic en el botón <strong>✕</strong>. Al cancelar, se te devuelve el monto al saldo.</p>
+
+    <div class="tip">
+      <span class="tip-icon">💡</span>
+      <span>Las reservas de bodega son independientes de tu pedido del catálogo. Puedes tener ambos en el mismo período.</span>
+    </div>
+  </div>
+
+  <!-- SALDO -->
+  <div class="section" id="saldo">
+    <h3>💰 Ver mi saldo</h3>
+    <p>Ve a la pestaña <strong>Mi Saldo 💰</strong> para ver un resumen completo de tu situación financiera en la cooperativa.</p>
+
+    <table>
+      <tr><th>Concepto</th><th>Significado</th></tr>
+      <tr><td><strong style="color:#2e7d32">Saldo a favor (+)</strong></td><td>Has pagado de más en períodos anteriores. Ese monto se descuenta de lo que debes en el período actual.</td></tr>
+      <tr><td><strong style="color:#c62828">Saldo pendiente (−)</strong></td><td>Tienes un monto por pagar de períodos anteriores.</td></tr>
+      <tr><td>Total a pagar</td><td>Subtotal del pedido + cargo fijo ± saldo anterior</td></tr>
+    </table>
+
+    <div class="tip info">
+      <span class="tip-icon">ℹ️</span>
+      <span>El saldo se actualiza automáticamente cuando el administrador registra un pago en el Flujo de Caja o cuando se cierra el período.</span>
+    </div>
+  </div>
+
+  <!-- FECHAS -->
+  <div class="section" id="fechas">
+    <h3>📅 Consultar fechas importantes</h3>
+    <p>En la pestaña <strong>Fechas 📅</strong> puedes ver las tres fechas clave del período actual:</p>
+    <ul>
+      <li><strong>📅 Apertura de pedidos</strong> — Desde cuándo puedes hacer tu pedido.</li>
+      <li><strong>⏰ Cierre de pedidos</strong> — Hasta cuándo puedes sellar o modificar tu pedido.</li>
+      <li><strong>🚚 Fecha de entrega</strong> — Cuándo está programada la distribución.</li>
+    </ul>
+    <p>También verás el estado actual de tu pedido (sin pedido / sellado / entregado).</p>
+  </div>
+
+
+  <!-- ═══ PARTE 2: ADMINISTRADORES ═══ -->
+  <div class="part-header admin" id="parte-admin" style="margin-top:3rem">
+    <div class="part-icon">⚙️</div>
+    <div>
+      <h2>Parte 2 — Para Administradores</h2>
+      <p>Gestión completa del período, familias, bodega y finanzas</p>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="section admin-sec" id="admin-dashboard">
+    <h3>📊 Resumen (Dashboard)</h3>
+    <p>La primera pantalla que ves al entrar como administrador. Muestra un vistazo rápido del estado del período:</p>
+    <ul>
+      <li><strong>Sellados:</strong> Cuántas familias ya enviaron su pedido vs. el total.</li>
+      <li><strong>Retirados:</strong> Cuántos pedidos han sido entregados.</li>
+      <li><strong>Pendientes:</strong> Familias que aún no tienen pedido.</li>
+      <li><strong>Total consolidado:</strong> Suma de todos los pedidos + cargos fijos.</li>
+    </ul>
+    <p>Haz clic en cada métrica para ir directamente al módulo correspondiente.</p>
+    <div class="tip info">
+      <span class="tip-icon">🛒</span>
+      <span>El botón <strong>Mi pedido</strong> (arriba a la derecha) te permite hacer tu propio pedido como familia, sin salir del panel admin.</span>
+    </div>
+  </div>
+
+  <!-- PEDIDOS -->
+  <div class="section admin-sec" id="admin-pedidos">
+    <h3>📋 Pedidos</h3>
+    <p>Vista de todos los pedidos del período. Puedes filtrar por estado y buscar familias.</p>
+    <ul>
+      <li><strong>Filtros:</strong> Todos / Sellados / Pendientes</li>
+      <li><strong>Ver detalle:</strong> Haz clic en una fila para expandir el detalle del pedido.</li>
+      <li><strong>Hacer pedido por una familia:</strong> Si una familia no tiene pedido y el período está activo, el botón <em>Hacer pedido</em> te permite ingresar al catálogo como esa familia para ayudarla.</li>
+    </ul>
+  </div>
+
+  <!-- RETIROS -->
+  <div class="section admin-sec" id="admin-retiros">
+    <h3>🚚 Retiros</h3>
+    <p>Aquí registras cuáles familias ya recibieron su pedido en el día de entrega.</p>
+    <ol class="steps">
+      <li>Busca a la familia en la lista (muestra solo las que tienen pedido sellado).</li>
+      <li>Expande la fila para ver el detalle del pedido si necesitas verificar.</li>
+      <li>Haz clic en <strong>✓ Marcar retirado</strong> cuando la familia recoge su pedido.</li>
+    </ol>
+    <p>El estado cambia a <span class="badge green">✓ Retirado</span> y la familia lo verá reflejado en su panel.</p>
+  </div>
+
+  <!-- FLUJO DE CAJA -->
+  <div class="section admin-sec" id="admin-flujo">
+    <h3>💵 Flujo de Caja</h3>
+    <p>Registra ingresos y egresos del período, y gestiona el cargo fijo por familia.</p>
+
+    <h4>Cargo fijo</h4>
+    <p>El monto que se cobra a cada familia por concepto de operación (flete, etc.). Haz clic en <em>Cambiar</em> para actualizarlo — aplica a todas las familias del período activo.</p>
+
+    <h4>Registrar un movimiento</h4>
+    <ol class="steps">
+      <li>Haz clic en <strong>+ Registrar movimiento</strong>.</li>
+      <li>Selecciona el tipo: <strong>↑ Ingreso</strong> (pago recibido) o <strong>↓ Egreso</strong> (gasto).</li>
+      <li>Si es un pago de familia, selecciona la familia — el saldo de esa familia se actualizará automáticamente.</li>
+      <li>Llena descripción, monto y fecha, luego confirma.</li>
+    </ol>
+
+    <div class="tip success">
+      <span class="tip-icon">💳</span>
+      <span><strong>Registrar pagos:</strong> Cuando una familia paga su deuda, registra un <em>Ingreso</em> y selecciona esa familia. Su saldo se actualizará instantáneamente.</span>
+    </div>
+  </div>
+
+  <!-- BODEGA ADMIN -->
+  <div class="section admin-sec" id="admin-bodega">
+    <h3>🏪 Bodega</h3>
+    <p>Gestiona el stock de productos disponibles para reserva directa por las familias.</p>
+
+    <h4>Agregar producto al stock de bodega</h4>
+    <ol class="steps">
+      <li>Haz clic en <strong>+ Agregar stock</strong>.</li>
+      <li>Busca el producto escribiendo su nombre — el buscador filtra desde el maestro de productos.</li>
+      <li>Selecciona el producto: se autocompleta el precio del maestro (puedes editarlo si es diferente).</li>
+      <li>Ingresa la cantidad disponible y observaciones opcionales. Confirma.</li>
+    </ol>
+
+    <h4>Asignar directamente a una familia</h4>
+    <p>Expande un ítem de bodega → <strong>+ Asignar a familia</strong>. Selecciona la familia y la cantidad. El monto se descuenta automáticamente del saldo de esa familia.</p>
+
+    <div class="tip">
+      <span class="tip-icon">ℹ️</span>
+      <span>Las familias también pueden reservar por su cuenta desde su panel. Las reservas restan del stock disponible en tiempo real.</span>
+    </div>
+  </div>
+
+  <!-- FAMILIAS ADMIN -->
+  <div class="section admin-sec" id="admin-familias">
+    <h3>👥 Familias</h3>
+    <p>Administra los miembros de la cooperativa: familias y administradores.</p>
+
+    <h4>Agregar un nuevo miembro</h4>
+    <ol class="steps">
+      <li>Haz clic en <strong>+ Nuevo miembro</strong>.</li>
+      <li>Llena nombre, correo y saldo inicial.</li>
+      <li>Selecciona el <strong>Rol</strong>:
+        <ul>
+          <li><em>Familia</em> — acceso solo a catálogo, pedidos y saldo.</li>
+          <li><em>Administrador</em> — acceso completo al panel de gestión.</li>
+        </ul>
+      </li>
+      <li>Haz clic en <strong>Agregar</strong>.</li>
+    </ol>
+
+    <h4>Gestionar PIN de acceso</h4>
+    <p>En cada tarjeta de miembro, al pie, verás la sección de PIN:</p>
+    <ul>
+      <li><strong>Asignar PIN:</strong> Haz clic en el botón, ingresa 4–6 dígitos y confirma.</li>
+      <li><strong>Cambiar PIN:</strong> Si ya tiene uno, el botón dice "Cambiar".</li>
+      <li><strong>Quitar PIN:</strong> Elimina el PIN y deja el acceso libre.</li>
+    </ul>
+    <div class="tip">
+      <span class="tip-icon">🔒</span>
+      <span>Recomendamos asignar un PIN a todos los administradores. Para las familias es opcional.</span>
+    </div>
+  </div>
+
+  <!-- PRODUCTOS ADMIN -->
+  <div class="section admin-sec" id="admin-productos">
+    <h3>🏷️ Productos (Maestro)</h3>
+    <p>El maestro de productos es la lista oficial de todos los artículos que puede ofrecer la cooperativa. Sirve como base para el catálogo y para cargar productos en bodega.</p>
+
+    <h4>Agregar producto</h4>
+    <ol class="steps">
+      <li>Haz clic en <strong>+ Nuevo producto</strong>.</li>
+      <li>Completa: nombre, categoría, proveedor, precio (CLP), unidad.</li>
+      <li>Activa <em>Con stock</em> si está disponible para pedidos. Confirma.</li>
+    </ol>
+
+    <h4>Editar producto existente</h4>
+    <p>Haz clic en <strong>Editar</strong> en la tarjeta del producto para modificar precio, unidad u otros datos.</p>
+
+    <h4>Activar o desactivar stock</h4>
+    <p>El botón <span class="badge green">✓ Stock</span> / <span class="badge red">Sin stock</span> activa o desactiva la disponibilidad del producto en el catálogo para las familias.</p>
+  </div>
+
+  <!-- SALDOS ADMIN -->
+  <div class="section admin-sec" id="admin-saldos">
+    <h3>💳 Saldos</h3>
+    <p>Vista rápida del estado financiero de todas las familias. Muestra un resumen con:
+      <span class="badge red">Pendiente</span>
+      <span class="badge" style="background:#f5f5f5;color:#888">Al día</span>
+      <span class="badge green">A favor</span>
+    </p>
+    <p>Para corregir el saldo de una familia manualmente, haz clic en <strong>Editar</strong>, ingresa el nuevo valor (positivo = a favor, negativo = pendiente) y confirma.</p>
+    <div class="tip">
+      <span class="tip-icon">💡</span>
+      <span>Normalmente no necesitas editar saldos manualmente — el sistema los actualiza automáticamente al registrar pagos en Flujo de Caja y al cerrar períodos.</span>
+    </div>
+  </div>
+
+  <!-- PERÍODO ADMIN -->
+  <div class="section admin-sec" id="admin-periodo">
+    <h3>📅 Período</h3>
+    <p>Gestiona el período activo: fechas, cierre y visualización del historial.</p>
+
+    <h4>Configurar fechas</h4>
+    <ul>
+      <li><strong>Apertura de pedidos:</strong> Desde cuándo las familias pueden hacer pedidos.</li>
+      <li><strong>Cierre de pedidos:</strong> Hasta cuándo se aceptan pedidos.</li>
+      <li><strong>Fecha de entrega:</strong> Día de distribución.</li>
+    </ul>
+    <p>Haz clic en <strong>✓ Guardar fechas</strong> para aplicar los cambios. El sistema validará que las fechas sean coherentes (ej: no puede cerrar antes de abrir).</p>
+
+    <h4>Cerrar período y abrir uno nuevo</h4>
+    <ol class="steps">
+      <li>En la sección <em>Cerrar período</em>, haz clic en <strong>Cerrar período actual</strong>.</li>
+      <li>Ingresa el nombre del nuevo período (ej: "Julio 2026") y opcionalmente el subtítulo.</li>
+      <li>Lee el resumen de advertencia y confirma con <strong>Confirmar cierre</strong>.</li>
+    </ol>
+    <div class="tip">
+      <span class="tip-icon">⚠️</span>
+      <span>Al cerrar el período, los saldos de todas las familias se actualizan automáticamente descontando el monto de sus pedidos. Esta acción <strong>no se puede deshacer</strong>.</span>
+    </div>
+
+    <h4>Historial de períodos anteriores</h4>
+    <p>Haz clic en <strong>Ver historial</strong> para ver todos los períodos cerrados. Cada período muestra:</p>
+    <ul>
+      <li>Fecha y hora de cierre</li>
+      <li>Número de familias y pedidos</li>
+      <li>Total recaudado en el período</li>
+      <li>Detalle por familia: saldo previo y monto de su pedido</li>
+    </ul>
+  </div>
+
+  <!-- ACTIVIDAD ADMIN -->
+  <div class="section admin-sec" id="admin-actividad">
+    <h3>📝 Actividad</h3>
+    <p>Registro de todas las acciones importantes realizadas por los administradores. Útil para auditoría y seguimiento.</p>
+
+    <table>
+      <tr><th>Acción registrada</th><th>Qué indica</th></tr>
+      <tr><td><span class="badge green">👤 Nuevo miembro</span></td><td>Un admin creó una nueva familia o administrador</td></tr>
+      <tr><td><span class="badge blue">📅 Fechas actualizadas</span></td><td>Se modificaron las fechas del período</td></tr>
+      <tr><td><span class="badge orange">🔒 Período cerrado</span></td><td>Se cerró un período y se abrió uno nuevo</td></tr>
+      <tr><td><span class="badge green">✅ Período creado</span></td><td>Se creó un nuevo período desde cero</td></tr>
+    </table>
+
+    <p>Cada registro muestra el nombre del administrador responsable, la descripción del cambio y la fecha y hora exacta.</p>
+    <p>Usa los filtros en la parte superior para ver solo un tipo de actividad.</p>
+  </div>
+
+  <!-- ═══ PREGUNTAS FRECUENTES ═══ -->
+  <div style="margin-top:3rem">
+    <h2 style="font-size:18px; color:#2d5a2d; margin-bottom:1rem; padding-bottom:8px; border-bottom:2px solid #c8e6c9;">❓ Preguntas frecuentes</h2>
+
+    <div class="section">
+      <h3 style="color:#555; font-size:15px;">¿Puedo modificar mi pedido después de sellarlo?</h3>
+      <p>Sí, mientras el período esté activo (entre la apertura y el cierre de pedidos). En la pestaña <em>Mi Pedido</em> o en el catálogo verás el botón <strong>Modificar</strong>. Eso "desella" el pedido para que puedas editarlo y volver a sellarlo.</p>
+    </div>
+
+    <div class="section">
+      <h3 style="color:#555; font-size:15px;">¿Qué es el "cargo fijo"?</h3>
+      <p>Es un monto que la cooperativa cobra a todas las familias por concepto de operación (flete, gestión, etc.). Se suma automáticamente al total de tu pedido. El valor lo configura el administrador desde Flujo de Caja.</p>
+    </div>
+
+    <div class="section">
+      <h3 style="color:#555; font-size:15px;">¿Cómo sé cuánto debo pagar?</h3>
+      <p>Ve a la pestaña <strong>Mi Saldo 💰</strong>. Ahí verás el total a pagar que incluye tu pedido + cargo fijo ± saldo anterior.</p>
+    </div>
+
+    <div class="section">
+      <h3 style="color:#555; font-size:15px;">¿Qué pasa si no hago pedido en un período?</h3>
+      <p>No se te cobra nada. El cargo fijo solo aplica si tienes un pedido sellado. Tu saldo anterior se mantiene para el siguiente período.</p>
+    </div>
+
+    <div class="section">
+      <h3 style="color:#555; font-size:15px;">¿Cómo contacto al administrador?</h3>
+      <p>La app no tiene chat interno. Comunícate por los canales habituales del grupo (WhatsApp, email, etc.) para consultas o correcciones de saldo.</p>
+    </div>
+  </div>
+
+  <div style="text-align:center; margin-top:3rem; padding:1.5rem; background:white; border-radius:12px; border:1px solid #c8e6c9;">
+    <p style="font-size:28px; margin-bottom:8px;">🛒</p>
+    <p style="font-size:14px; color:#2e7d32; font-weight:600;">Cooperativa de Compras</p>
+    <p style="font-size:12px; color:#aaa; margin-top:4px;">Guía de uso — versión junio 2026</p>
+  </div>
+
+</div>
+</body>
+</html>
