@@ -5,7 +5,7 @@ import {
   getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
 } from './supabaseClient';
 import './App.css';
-import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs } from './AdminComponents';
+import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -817,6 +817,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
 
   const tabs = [
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
+    { id: 'analitica', l: 'Analítica', ic: '📈' },
     { id: 'pedidos', l: 'Pedidos', ic: '📋' },
     { id: 'retiros', l: 'Retiros', ic: '🚚' },
     { id: 'flujo', l: 'Flujo Caja', ic: '💵' },
@@ -888,6 +889,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
 
       <div style={{ padding: '1rem' }}>
         {tab === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
+        {tab === 'analitica' && <AdminAnalytics families={families} products={products} />}
         {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
         {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
         {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}

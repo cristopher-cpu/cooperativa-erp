@@ -30,6 +30,19 @@ export async function getAllPeriods() {
   return data || [];
 }
 
+// Analytics: fetch full history across all periods (client-side aggregation, no extra cost)
+export async function getAllSealedOrders() {
+  const { data, error } = await supabase.from('sealed_orders').select('*').order('sealed_at', { ascending: true });
+  if (error) { console.error('getAllSealedOrders error:', error.message); return []; }
+  return data || [];
+}
+
+export async function getAllCashFlow() {
+  const { data, error } = await supabase.from('cash_flow').select('*').order('date', { ascending: true });
+  if (error) { console.error('getAllCashFlow error:', error.message); return []; }
+  return data || [];
+}
+
 // Supabase v2: insert/update without .select() returns null data even on success.
 // All mutating functions below use .select() so callers get real data back.
 

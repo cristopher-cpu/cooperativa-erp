@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods } from './supabaseClient';
+import React, { useState, useEffect, useMemo } from 'react';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -1295,6 +1295,536 @@ export function AdminLogs() {
           );
         })
       )}
+    </div>
+  );
+}
+
+// ─── ANALÍTICA ────────────────────────────────────────────────────────────────
+
+const MONTHS_ES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+const clp = n => '$' + Math.round(n || 0).toLocaleString('es-CL');
+
+function parseOrderItems(ord) {
+  try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
+}
+
+// Assigns a calendar bucket (month / quarter / year) to a date string
+function bucketOf(dateStr, gran) {
+  if (!dateStr) return { key: 'sin-fecha', label: 'Sin fecha' };
+  const iso = dateStr.length === 10 ? dateStr + 'T12:00:00' : dateStr;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return { key: 'sin-fecha', label: 'Sin fecha' };
+  const y = d.getFullYear(), m = d.getMonth();
+  if (gran === 'anio') return { key: String(y), label: String(y) };
+  if (gran === 'trimestre') { const q = Math.floor(m / 3) + 1; return { key: `${y}-Q${q}`, label: `Q${q} ${y}` }; }
+  return { key: `${y}-${String(m + 1).padStart(2, '0')}`, label: `${MONTHS_ES[m]} ${y}` };
+}
+
+// Vertical bar chart (single series) — dependency-free
+function TrendBars({ data, color, fmt }) {
+  if (!data || data.length === 0) return <p style={{ color: '#aaa', fontSize: '12px', textAlign: 'center', padding: '1.5rem 0', margin: 0 }}>Sin datos suficientes para mostrar tendencia</p>;
+  const max = Math.max(...data.map(d => d.value), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', height: '150px', padding: '8px 0', overflowX: 'auto' }}>
+      {data.map(d => (
+        <div key={d.key} style={{ minWidth: '38px', flex: '1 0 38px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', height: '100%', justifyContent: 'flex-end' }}>
+          <span style={{ fontSize: '9px', fontWeight: 700, color, whiteSpace: 'nowrap' }}>{fmt(d.value)}</span>
+          <div title={`${d.label}: ${fmt(d.value)}`} style={{ width: '72%', height: `${Math.max((d.value / max) * 105, 2)}px`, background: color, borderRadius: '4px 4px 0 0' }} />
+          <span style={{ fontSize: '9px', color: '#888', whiteSpace: 'nowrap' }}>{d.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Grouped bars: ingresos vs egresos
+function DualBars({ data }) {
+  if (!data || data.length === 0) return <p style={{ color: '#aaa', fontSize: '12px', textAlign: 'center', padding: '1.5rem 0', margin: 0 }}>Sin movimientos de caja en el rango</p>;
+  const max = Math.max(...data.flatMap(d => [d.ing, d.egr]), 1);
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '14px', marginBottom: '8px', fontSize: '11px' }}>
+        <span style={{ color: '#2e7d32', fontWeight: 600 }}>■ Ingresos</span>
+        <span style={{ color: '#c62828', fontWeight: 600 }}>■ Egresos</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '10px', height: '150px', padding: '8px 0', overflowX: 'auto' }}>
+        {data.map(d => (
+          <div key={d.key} style={{ minWidth: '50px', flex: '1 0 50px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', height: '100%', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '105px' }}>
+              <div title={`Ingresos: ${clp(d.ing)}`} style={{ width: '14px', height: `${Math.max((d.ing / max) * 105, 2)}px`, background: '#2e7d32', borderRadius: '3px 3px 0 0' }} />
+              <div title={`Egresos: ${clp(d.egr)}`} style={{ width: '14px', height: `${Math.max((d.egr / max) * 105, 2)}px`, background: '#c62828', borderRadius: '3px 3px 0 0' }} />
+            </div>
+            <span style={{ fontSize: '9px', color: '#888', whiteSpace: 'nowrap' }}>{d.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Ranking with per-row data lineage (answers "qué datos construyen el indicador")
+function RankingCard({ title, subtitle, icon, color, accentBg, rows, emptyMsg }) {
+  const [open, setOpen] = useState(null);
+  const top = rows.slice(0, 8);
+  const max = Math.max(...top.map(r => r.value), 1);
+  return (
+    <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #e0e0e0', padding: '1.1rem', marginBottom: '1rem' }}>
+      <div style={{ marginBottom: '0.9rem' }}>
+        <p style={{ fontSize: '13px', fontWeight: 700, color: '#333', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>{icon} {title}</p>
+        {subtitle && <p style={{ fontSize: '11px', color: '#aaa', margin: '2px 0 0' }}>{subtitle}</p>}
+      </div>
+      {top.length === 0 ? (
+        <p style={{ color: '#aaa', fontSize: '12px', margin: 0 }}>{emptyMsg || 'Sin datos en el rango seleccionado'}</p>
+      ) : top.map((r, i) => {
+        const isOpen = open === r.key;
+        return (
+          <div key={r.key} style={{ marginBottom: '8px' }}>
+            <div onClick={() => setOpen(isOpen ? null : r.key)}
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#bbb', width: '16px', flexShrink: 0 }}>{i + 1}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color, flexShrink: 0 }}>{r.valueLabel}</span>
+                </div>
+                <div style={{ height: '7px', background: '#f0f0f0', borderRadius: '4px', marginTop: '3px', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${(r.value / max) * 100}%`, background: color, borderRadius: '4px' }} />
+                </div>
+                {r.sub && <p style={{ fontSize: '10px', color: '#aaa', margin: '2px 0 0' }}>{r.sub}</p>}
+              </div>
+              <span style={{ fontSize: '10px', color: '#bbb', flexShrink: 0 }}>{isOpen ? '▲' : '▼'}</span>
+            </div>
+            {isOpen && r.contributions && (
+              <div style={{ margin: '6px 0 0 24px', padding: '8px 10px', background: accentBg || '#f9fafb', borderRadius: '6px', border: '1px solid #f0f0f0' }}>
+                <p style={{ fontSize: '10px', color: '#888', margin: '0 0 6px', fontStyle: 'italic' }}>Datos que componen este valor:</p>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                  <thead>
+                    <tr>{r.contribCols.map(c => <th key={c} style={{ textAlign: 'left', color: '#999', fontWeight: 600, padding: '2px 4px', fontSize: '10px' }}>{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {r.contributions.map((row, ri) => (
+                      <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ padding: '3px 4px', borderTop: '1px solid #f0f0f0', color: ci === 0 ? '#333' : '#666', fontWeight: ci === 0 ? 500 : 400 }}>{cell}</td>)}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function AdminAnalytics({ families = [], products = [] }) {
+  const [granularity, setGranularity] = useState('mes');
+  const [selectedBucket, setSelectedBucket] = useState('all');
+  const [allOrders, setAllOrders] = useState([]);
+  const [allCash, setAllCash] = useState([]);
+  const [allPeriods, setAllPeriods] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedKpi, setExpandedKpi] = useState(null);
+
+  useEffect(() => {
+    Promise.all([getAllSealedOrders(), getAllCashFlow(), getAllPeriods()]).then(([o, c, p]) => {
+      setAllOrders(o); setAllCash(c); setAllPeriods(p); setLoading(false);
+    });
+  }, []);
+
+  const famList = useMemo(() => families.filter(f => f.role === 'familia'), [families]);
+  const famById = useMemo(() => { const m = {}; families.forEach(f => { m[f.id] = f; }); return m; }, [families]);
+  const famName = id => (famById[id] && famById[id].name) || 'Familia';
+  const prodCat = useMemo(() => { const m = {}; products.forEach(p => { m[p.id] = p.category; }); return m; }, [products]);
+  const cargoByPeriod = useMemo(() => { const m = {}; allPeriods.forEach(p => { m[p.id] = p.fixed_charge != null ? p.fixed_charge : 4000; }); return m; }, [allPeriods]);
+
+  // Enrich every order with cargo, gmv, parsed items and its time bucket
+  const orders = useMemo(() => allOrders.map(o => {
+    const cargo = cargoByPeriod[o.period_id] != null ? cargoByPeriod[o.period_id] : 4000;
+    const b = bucketOf(o.sealed_at, granularity);
+    return { ...o, cargo, items: parseOrderItems(o), gmv: (o.total || 0) + cargo, bucketKey: b.key, bucketLabel: b.label };
+  }), [allOrders, cargoByPeriod, granularity]);
+
+  const buckets = useMemo(() => {
+    const map = new Map();
+    orders.forEach(o => { if (!map.has(o.bucketKey)) map.set(o.bucketKey, o.bucketLabel); });
+    return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([key, label]) => ({ key, label }));
+  }, [orders]);
+
+  const fOrders = selectedBucket === 'all' ? orders : orders.filter(o => o.bucketKey === selectedBucket);
+  const cashInBucket = selectedBucket === 'all' ? allCash : allCash.filter(e => bucketOf(e.date, granularity).key === selectedBucket);
+  const rangeLabel = selectedBucket === 'all' ? 'todo el histórico' : (buckets.find(b => b.key === selectedBucket) || {}).label || selectedBucket;
+
+  // ── KPIs ──
+  const gmv = fOrders.reduce((s, o) => s + o.gmv, 0);
+  const sealedCount = fOrders.length;
+  const ticket = sealedCount ? gmv / sealedCount : 0;
+  const uniqueFams = new Set(fOrders.map(o => o.family_id)).size;
+  const participation = famList.length ? (uniqueFams / famList.length) * 100 : 0;
+  const retired = fOrders.filter(o => o.retired).length;
+  const retiroRate = sealedCount ? (retired / sealedCount) * 100 : 0;
+  const ingresos = cashInBucket.filter(e => e.type === 'ingreso').reduce((s, e) => s + (e.amount || 0), 0);
+  const egresos = cashInBucket.filter(e => e.type === 'egreso').reduce((s, e) => s + (e.amount || 0), 0);
+  const balanceCaja = ingresos - egresos;
+  const deudaFams = famList.filter(f => (f.balance || 0) < 0).sort((a, b) => (a.balance || 0) - (b.balance || 0));
+  const favorFams = famList.filter(f => (f.balance || 0) > 0).sort((a, b) => (b.balance || 0) - (a.balance || 0));
+  const deudaTotal = deudaFams.reduce((s, f) => s + Math.abs(f.balance || 0), 0);
+  const favorTotal = favorFams.reduce((s, f) => s + (f.balance || 0), 0);
+
+  // ── Product / provider / category aggregation (with lineage) ──
+  const prodAgg = useMemo(() => {
+    const m = {};
+    fOrders.forEach(o => o.items.forEach(it => {
+      const qty = Number(it.qty) || 0, val = (Number(it.p) || 0) * qty;
+      const k = it.n || 'Producto';
+      if (!m[k]) m[k] = { name: k, unit: it.u, provider: it.pv || 'Sin proveedor', qty: 0, value: 0, contrib: {} };
+      m[k].qty += qty; m[k].value += val;
+      const fn = famName(o.family_id);
+      if (!m[k].contrib[fn]) m[k].contrib[fn] = { qty: 0, value: 0 };
+      m[k].contrib[fn].qty += qty; m[k].contrib[fn].value += val;
+    }));
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fOrders]);
+
+  const provAgg = useMemo(() => {
+    const m = {};
+    fOrders.forEach(o => o.items.forEach(it => {
+      const qty = Number(it.qty) || 0, val = (Number(it.p) || 0) * qty;
+      const k = it.pv || 'Sin proveedor';
+      if (!m[k]) m[k] = { value: 0, qty: 0, prods: {} };
+      m[k].value += val; m[k].qty += qty;
+      const pn = it.n || 'Producto';
+      if (!m[k].prods[pn]) m[k].prods[pn] = { qty: 0, value: 0 };
+      m[k].prods[pn].qty += qty; m[k].prods[pn].value += val;
+    }));
+    return m;
+  }, [fOrders]);
+
+  const catAgg = useMemo(() => {
+    const m = {};
+    fOrders.forEach(o => o.items.forEach(it => {
+      const qty = Number(it.qty) || 0, val = (Number(it.p) || 0) * qty;
+      const k = prodCat[it.id] || 'Sin categoría';
+      if (!m[k]) m[k] = { value: 0, qty: 0, prods: {} };
+      m[k].value += val; m[k].qty += qty;
+      const pn = it.n || 'Producto';
+      if (!m[k].prods[pn]) m[k].prods[pn] = { qty: 0, value: 0 };
+      m[k].prods[pn].qty += qty; m[k].prods[pn].value += val;
+    }));
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fOrders]);
+
+  const famAgg = useMemo(() => {
+    const m = {};
+    fOrders.forEach(o => {
+      if (!m[o.family_id]) m[o.family_id] = { gmv: 0, orders: [] };
+      m[o.family_id].gmv += o.gmv;
+      m[o.family_id].orders.push(o);
+    });
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fOrders]);
+
+  // ── Ranking rows ──
+  const topProdQty = Object.values(prodAgg).map(p => ({
+    key: p.name, label: p.name, sub: `${p.provider} · ${p.unit}`, value: p.qty, valueLabel: `${p.qty} ${p.unit || ''}`.trim(),
+    contribCols: ['Familia', 'Cantidad', 'Valor'],
+    contributions: Object.entries(p.contrib).sort((a, b) => b[1].qty - a[1].qty).map(([fn, v]) => [fn, `${v.qty} ${p.unit || ''}`.trim(), clp(v.value)])
+  })).sort((a, b) => b.value - a.value);
+
+  const topProdValue = Object.values(prodAgg).map(p => ({
+    key: p.name, label: p.name, sub: `${p.provider} · ${p.qty} ${p.unit || ''}`.trim(), value: p.value, valueLabel: clp(p.value),
+    contribCols: ['Familia', 'Cantidad', 'Valor'],
+    contributions: Object.entries(p.contrib).sort((a, b) => b[1].value - a[1].value).map(([fn, v]) => [fn, `${v.qty} ${p.unit || ''}`.trim(), clp(v.value)])
+  })).sort((a, b) => b.value - a.value);
+
+  const topProv = Object.entries(provAgg).map(([name, p]) => ({
+    key: name, label: name, sub: `${Object.keys(p.prods).length} productos distintos`, value: p.value, valueLabel: clp(p.value),
+    contribCols: ['Producto', 'Cantidad', 'Valor'],
+    contributions: Object.entries(p.prods).sort((a, b) => b[1].value - a[1].value).map(([pn, v]) => [pn, `${v.qty}`, clp(v.value)])
+  })).sort((a, b) => b.value - a.value);
+
+  const topCat = Object.entries(catAgg).map(([name, p]) => ({
+    key: name, label: name, sub: `${Object.keys(p.prods).length} productos`, value: p.value, valueLabel: clp(p.value),
+    contribCols: ['Producto', 'Cantidad', 'Valor'],
+    contributions: Object.entries(p.prods).sort((a, b) => b[1].value - a[1].value).map(([pn, v]) => [pn, `${v.qty}`, clp(v.value)])
+  })).sort((a, b) => b.value - a.value);
+
+  const topFam = Object.entries(famAgg).map(([fid, p]) => ({
+    key: fid, label: famName(fid), sub: `${p.orders.length} pedido(s)`, value: p.gmv, valueLabel: clp(p.gmv),
+    contribCols: ['Período', 'Productos', 'Total'],
+    contributions: p.orders.sort((a, b) => b.gmv - a.gmv).map(o => [o.bucketLabel, `${o.items.length} ítems`, clp(o.gmv)])
+  })).sort((a, b) => b.value - a.value);
+
+  const debtRank = deudaFams.map(f => ({
+    key: f.id, label: f.name, sub: f.email || '', value: Math.abs(f.balance || 0), valueLabel: clp(Math.abs(f.balance || 0)),
+    contribCols: ['Concepto', 'Monto'],
+    contributions: [['Saldo pendiente actual', clp(Math.abs(f.balance || 0))]]
+  }));
+
+  // ── Trends across all buckets (evolution) ──
+  const salesTrend = useMemo(() => {
+    const m = new Map();
+    orders.forEach(o => {
+      if (!m.has(o.bucketKey)) m.set(o.bucketKey, { key: o.bucketKey, label: o.bucketLabel, gmv: 0, fams: new Set() });
+      const e = m.get(o.bucketKey); e.gmv += o.gmv; e.fams.add(o.family_id);
+    });
+    return [...m.values()].sort((a, b) => (a.key < b.key ? -1 : 1)).slice(-12);
+  }, [orders]);
+
+  const cashTrend = useMemo(() => {
+    const m = new Map();
+    allCash.forEach(e => {
+      const b = bucketOf(e.date, granularity);
+      if (!m.has(b.key)) m.set(b.key, { key: b.key, label: b.label, ing: 0, egr: 0 });
+      const x = m.get(b.key);
+      if (e.type === 'ingreso') x.ing += e.amount || 0; else x.egr += e.amount || 0;
+    });
+    return [...m.values()].sort((a, b) => (a.key < b.key ? -1 : 1)).slice(-12);
+  }, [allCash, granularity]);
+
+  const partTrend = salesTrend.map(t => ({ key: t.key, label: t.label, value: famList.length ? Math.round((t.fams.size / famList.length) * 100) : 0 }));
+
+  // ── KPI definitions with data lineage ──
+  const kpis = [
+    {
+      id: 'gmv', icon: '💰', label: 'Ventas totales (GMV)', value: clp(gmv), color: '#2e7d32', bg: '#e8f5e9',
+      definition: 'Valor total de todos los pedidos sellados en el rango, incluyendo el cargo fijo.',
+      formula: 'Σ (subtotal de productos + cargo fijo) de cada pedido sellado.',
+      cols: ['Familia', 'Subtotal + Cargo', 'Total'],
+      rows: [...fOrders].sort((a, b) => b.gmv - a.gmv).map(o => [famName(o.family_id), `${clp(o.total)} + ${clp(o.cargo)}`, clp(o.gmv)]),
+      footer: ['Total', '', clp(gmv)]
+    },
+    {
+      id: 'orders', icon: '📦', label: 'Pedidos sellados', value: String(sealedCount), color: '#1565c0', bg: '#e3f2fd',
+      definition: 'Cantidad de pedidos que las familias confirmaron (sellaron) en el rango.',
+      formula: 'Conteo de registros en pedidos sellados dentro del rango.',
+      cols: ['Familia', 'Período', 'Total'],
+      rows: [...fOrders].sort((a, b) => b.gmv - a.gmv).map(o => [famName(o.family_id), o.bucketLabel, clp(o.gmv)])
+    },
+    {
+      id: 'ticket', icon: '🎯', label: 'Ticket promedio', value: clp(ticket), color: '#6a1b9a', bg: '#f3e5f5',
+      definition: 'Cuánto gasta en promedio una familia por pedido.',
+      formula: `GMV (${clp(gmv)}) ÷ N° de pedidos (${sealedCount}) = ${clp(ticket)}`,
+      cols: ['Familia', 'Total del pedido'],
+      rows: [...fOrders].sort((a, b) => b.gmv - a.gmv).map(o => [famName(o.family_id), clp(o.gmv)])
+    },
+    {
+      id: 'part', icon: '👥', label: 'Participación', value: `${Math.round(participation)}%`, color: '#00838f', bg: '#e0f7fa',
+      definition: 'Porcentaje de familias que hicieron al menos un pedido en el rango.',
+      formula: `Familias que pidieron (${uniqueFams}) ÷ Total de familias (${famList.length}) = ${Math.round(participation)}%`,
+      cols: ['Familia', '¿Pidió?'],
+      rows: famList.map(f => [f.name, new Set(fOrders.map(o => o.family_id)).has(f.id) ? '✓ Sí' : '— No'])
+    },
+    {
+      id: 'retiro', icon: '🚚', label: 'Tasa de retiro', value: `${Math.round(retiroRate)}%`, color: '#e65100', bg: '#fff3e0',
+      definition: 'De los pedidos sellados, cuántos fueron efectivamente retirados/entregados.',
+      formula: `Pedidos retirados (${retired}) ÷ Pedidos sellados (${sealedCount}) = ${Math.round(retiroRate)}%`,
+      cols: ['Familia', 'Estado'],
+      rows: [...fOrders].sort((a, b) => (b.retired === a.retired ? 0 : b.retired ? -1 : 1)).map(o => [famName(o.family_id), o.retired ? '✓ Retirado' : '⏳ Pendiente'])
+    },
+    {
+      id: 'ing', icon: '↑', label: 'Ingresos (caja)', value: clp(ingresos), color: '#2e7d32', bg: '#e8f5e9',
+      definition: 'Dinero efectivamente recibido (pagos de familias, abonos) registrado en Flujo de Caja.',
+      formula: 'Σ de movimientos tipo "ingreso" en el rango.',
+      cols: ['Fecha', 'Descripción', 'Monto'],
+      rows: cashInBucket.filter(e => e.type === 'ingreso').map(e => [new Date(e.date).toLocaleDateString('es-CL'), (e.family_name ? e.family_name + ' · ' : '') + e.description, clp(e.amount)]),
+      footer: ['', 'Total ingresos', clp(ingresos)]
+    },
+    {
+      id: 'egr', icon: '↓', label: 'Egresos (caja)', value: clp(egresos), color: '#c62828', bg: '#ffebee',
+      definition: 'Gastos y compras registrados en Flujo de Caja.',
+      formula: 'Σ de movimientos tipo "egreso" en el rango.',
+      cols: ['Fecha', 'Descripción', 'Monto'],
+      rows: cashInBucket.filter(e => e.type === 'egreso').map(e => [new Date(e.date).toLocaleDateString('es-CL'), e.description, clp(e.amount)]),
+      footer: ['', 'Total egresos', clp(egresos)]
+    },
+    {
+      id: 'balcaja', icon: '⚖️', label: 'Balance de caja', value: clp(balanceCaja), color: balanceCaja >= 0 ? '#2e7d32' : '#c62828', bg: balanceCaja >= 0 ? '#e8f5e9' : '#ffebee',
+      definition: 'Diferencia entre lo que entró y lo que salió de la caja en el rango.',
+      formula: `Ingresos (${clp(ingresos)}) − Egresos (${clp(egresos)}) = ${clp(balanceCaja)}`,
+      cols: ['Concepto', 'Monto'],
+      rows: [['Ingresos', clp(ingresos)], ['Egresos', '− ' + clp(egresos)]],
+      footer: ['Balance', clp(balanceCaja)]
+    },
+    {
+      id: 'deuda', icon: '⚠️', label: 'Deuda total (actual)', value: clp(deudaTotal), color: '#c62828', bg: '#ffebee', global: true,
+      definition: 'Suma de los saldos pendientes de todas las familias, en este momento (no depende del rango).',
+      formula: 'Σ |saldo| de familias con saldo negativo.',
+      cols: ['Familia', 'Deuda'],
+      rows: deudaFams.map(f => [f.name, clp(Math.abs(f.balance || 0))]),
+      footer: ['Total', clp(deudaTotal)]
+    },
+    {
+      id: 'favor', icon: '✅', label: 'Saldo a favor (actual)', value: clp(favorTotal), color: '#2e7d32', bg: '#e8f5e9', global: true,
+      definition: 'Suma de saldos a favor de todas las familias, en este momento.',
+      formula: 'Σ saldo de familias con saldo positivo.',
+      cols: ['Familia', 'A favor'],
+      rows: favorFams.map(f => [f.name, clp(f.balance || 0)]),
+      footer: ['Total', clp(favorTotal)]
+    },
+  ];
+
+  // ── Automatic plain-language insights ──
+  const insights = [];
+  if (topProdValue[0]) insights.push({ ic: '⭐', txt: `Producto estrella: **${topProdValue[0].label}** con ${clp(topProdValue[0].value)} en ventas.` });
+  if (topProv[0]) insights.push({ ic: '🏭', txt: `Proveedor principal: **${topProv[0].label}** concentra ${clp(topProv[0].value)} de los pedidos.` });
+  if (topFam[0]) insights.push({ ic: '🛒', txt: `Familia que más compra: **${topFam[0].label}** con ${clp(topFam[0].value)}.` });
+  if (debtRank[0]) insights.push({ ic: '⚠️', txt: `Mayor deuda: **${debtRank[0].label}** debe ${clp(debtRank[0].value)}. Deuda total de la cooperativa: ${clp(deudaTotal)}.` });
+  if (sealedCount > 0) insights.push({ ic: '📊', txt: `Participación de ${Math.round(participation)}%: ${uniqueFams} de ${famList.length} familias compraron en ${rangeLabel}.` });
+
+  const renderInsight = (txt) => {
+    const parts = txt.split(/\*\*(.*?)\*\*/g);
+    return parts.map((p, i) => i % 2 === 1 ? <strong key={i} style={{ color: '#1a1a1a' }}>{p}</strong> : <span key={i}>{p}</span>);
+  };
+
+  if (loading) return <p style={{ color: '#888', fontSize: '13px' }}>Cargando analítica...</p>;
+
+  if (allOrders.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '3rem', background: 'white', borderRadius: '10px', border: '1px solid #dde8dd' }}>
+        <p style={{ fontSize: '36px', margin: 0 }}>📈</p>
+        <p style={{ color: '#555', fontSize: '14px', margin: '1rem 0 0', fontWeight: 500 }}>Aún no hay pedidos sellados para analizar</p>
+        <p style={{ color: '#aaa', fontSize: '12px', margin: '4px 0 0' }}>Los indicadores aparecerán a medida que las familias realicen pedidos.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Controles de rango */}
+      <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <p style={{ fontSize: '11px', color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 6px' }}>Granularidad</p>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {[{ k: 'mes', l: 'Mensual' }, { k: 'trimestre', l: 'Trimestral' }, { k: 'anio', l: 'Anual' }].map(g => (
+                <button key={g.k} onClick={() => { setGranularity(g.k); setSelectedBucket('all'); }}
+                  style={{ padding: '6px 14px', borderRadius: '20px', border: '1px solid', cursor: 'pointer', fontSize: '12px', fontWeight: granularity === g.k ? 700 : 400, background: granularity === g.k ? '#1565c0' : 'white', borderColor: granularity === g.k ? '#1565c0' : '#dde8dd', color: granularity === g.k ? 'white' : '#555' }}>
+                  {g.l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p style={{ fontSize: '11px', color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 6px' }}>Período</p>
+            <select value={selectedBucket} onChange={e => setSelectedBucket(e.target.value)}
+              style={{ padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px', background: 'white', minWidth: '160px' }}>
+              <option value="all">Todo el histórico</option>
+              {buckets.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <p style={{ fontSize: '11px', color: '#aaa', margin: '10px 0 0' }}>
+          Mostrando datos de <strong style={{ color: '#1565c0' }}>{rangeLabel}</strong>. Haz clic en cualquier indicador para ver los datos exactos que lo componen.
+        </p>
+      </div>
+
+      {/* Insights automáticos */}
+      {insights.length > 0 && (
+        <div style={{ background: 'linear-gradient(135deg, #e3f2fd 0%, #e8f5e9 100%)', borderRadius: '10px', border: '1px solid #c8e6c9', padding: '1.1rem', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '12px', fontWeight: 700, color: '#1565c0', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>💡 Resumen inteligente — {rangeLabel}</p>
+          <div style={{ display: 'grid', gap: '8px' }}>
+            {insights.map((ins, i) => (
+              <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '13px', color: '#444' }}>
+                <span style={{ flexShrink: 0 }}>{ins.ic}</span>
+                <span>{renderInsight(ins.txt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* KPI grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', marginBottom: '0.5rem' }}>
+        {kpis.map(k => (
+          <div key={k.id} onClick={() => setExpandedKpi(expandedKpi === k.id ? null : k.id)}
+            style={{ padding: '0.9rem', background: k.bg, borderRadius: '10px', border: `1px solid ${expandedKpi === k.id ? k.color : k.color + '22'}`, cursor: 'pointer', transition: 'transform 0.1s' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: '18px' }}>{k.icon}</span>
+              <span style={{ fontSize: '9px', color: k.color, opacity: 0.7 }}>{expandedKpi === k.id ? '▲' : 'ⓘ'}</span>
+            </div>
+            <p style={{ fontSize: '10px', color: '#666', margin: '6px 0 0', fontWeight: 500 }}>{k.label}</p>
+            <p style={{ fontSize: '18px', fontWeight: 700, margin: '2px 0 0', color: k.color }}>{k.value}</p>
+            {k.global && <span style={{ fontSize: '8px', color: '#999', fontStyle: 'italic' }}>valor actual</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* KPI detail panel (data lineage) */}
+      {expandedKpi && (() => {
+        const k = kpis.find(x => x.id === expandedKpi);
+        if (!k) return null;
+        return (
+          <div style={{ background: 'white', border: `1.5px solid ${k.color}`, borderRadius: '10px', padding: '1.1rem', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+              <div>
+                <p style={{ fontSize: '14px', fontWeight: 700, color: k.color, margin: 0 }}>{k.icon} {k.label} = {k.value}</p>
+                <p style={{ fontSize: '12px', color: '#555', margin: '4px 0 0' }}>{k.definition}</p>
+              </div>
+              <button onClick={() => setExpandedKpi(null)} style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', padding: '3px 8px', color: '#888' }}>✕ Cerrar</button>
+            </div>
+            <div style={{ background: '#f8f9fa', borderRadius: '6px', padding: '8px 12px', marginBottom: '10px' }}>
+              <p style={{ fontSize: '11px', color: '#888', margin: 0 }}><strong style={{ color: '#555' }}>Cómo se calcula:</strong> {k.formula}</p>
+            </div>
+            {k.rows && k.rows.length > 0 ? (
+              <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead style={{ position: 'sticky', top: 0, background: 'white' }}>
+                    <tr>{k.cols.map(c => <th key={c} style={{ textAlign: 'left', padding: '6px 8px', color: '#999', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '2px solid #f0f0f0' }}>{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {k.rows.map((row, ri) => (
+                      <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ padding: '5px 8px', borderBottom: '1px solid #f5f5f5', color: ci === 0 ? '#333' : '#555', fontWeight: ci === 0 ? 500 : 400 }}>{cell}</td>)}</tr>
+                    ))}
+                  </tbody>
+                  {k.footer && (
+                    <tfoot>
+                      <tr>{k.footer.map((cell, ci) => <td key={ci} style={{ padding: '7px 8px', borderTop: '2px solid #e0e0e0', color: k.color, fontWeight: 700 }}>{cell}</td>)}</tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            ) : <p style={{ fontSize: '12px', color: '#aaa', margin: 0 }}>Sin datos individuales en este rango.</p>}
+          </div>
+        );
+      })()}
+
+      {/* Gráficos de tendencia */}
+      <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1.1rem', marginBottom: '1rem' }}>
+        <p style={{ fontSize: '13px', fontWeight: 700, color: '#333', margin: '0 0 4px' }}>📈 Evolución de ventas</p>
+        <p style={{ fontSize: '11px', color: '#aaa', margin: '0 0 8px' }}>GMV por {granularity === 'mes' ? 'mes' : granularity === 'trimestre' ? 'trimestre' : 'año'} (últimos 12 · todo el histórico)</p>
+        <TrendBars data={salesTrend.map(t => ({ key: t.key, label: t.label, value: t.gmv }))} color="#2e7d32" fmt={v => clp(v)} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+        <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1.1rem' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#333', margin: '0 0 4px' }}>💵 Ingresos vs Egresos</p>
+          <p style={{ fontSize: '11px', color: '#aaa', margin: '0 0 8px' }}>Flujo de caja por período</p>
+          <DualBars data={cashTrend} />
+        </div>
+        <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1.1rem' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#333', margin: '0 0 4px' }}>👥 Participación</p>
+          <p style={{ fontSize: '11px', color: '#aaa', margin: '0 0 8px' }}>% de familias que compraron por período</p>
+          <TrendBars data={partTrend} color="#1565c0" fmt={v => v + '%'} />
+        </div>
+      </div>
+
+      {/* Rankings */}
+      <p style={{ fontSize: '12px', fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '1.5rem 0 0.75rem' }}>Rankings — {rangeLabel}</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
+        <RankingCard icon="🥇" title="Top productos por valor" subtitle="Cuánto dinero genera cada producto" color="#2e7d32" accentBg="#f1f8f1" rows={topProdValue} />
+        <RankingCard icon="📦" title="Top productos por cantidad" subtitle="Los más pedidos en unidades" color="#1565c0" accentBg="#eef5fc" rows={topProdQty} />
+        <RankingCard icon="🏭" title="Top proveedores" subtitle="Por valor total solicitado" color="#6a1b9a" accentBg="#f7f0fa" rows={topProv} />
+        <RankingCard icon="🏷️" title="Top categorías" subtitle="Por valor total" color="#00838f" accentBg="#e9f8fa" rows={topCat} />
+        <RankingCard icon="🛒" title="Familias que más compran" subtitle="Por valor total de pedidos" color="#e65100" accentBg="#fdf3ea" rows={topFam} />
+        <RankingCard icon="⚠️" title="Familias con más deuda" subtitle="Saldo pendiente actual" color="#c62828" accentBg="#fdeeee" rows={debtRank} emptyMsg="Ninguna familia tiene deuda 🎉" />
+      </div>
+
+      <p style={{ fontSize: '11px', color: '#bbb', textAlign: 'center', margin: '1.5rem 0 0' }}>
+        Todos los indicadores se calculan en tiempo real desde los pedidos, saldos y flujo de caja. Sin servicios externos.
+      </p>
     </div>
   );
 }
