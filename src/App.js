@@ -27,14 +27,8 @@ function App() {
         setFamilies(fams);
         setProducts(prods);
         setPeriod(per);
-        if (per) {
-          const orders = await getSealedOrders(per.id);
-          if (!cancelled) {
-            const orderMap = {};
-            orders.forEach(o => { orderMap[o.family_id] = o; });
-            setSealed(orderMap);
-          }
-        }
+        // Sealed orders load in a dedicated effect keyed on period.id (see below),
+        // so they always re-sync when the active period changes (e.g. after closing one).
       } catch (error) {
         console.error('Error cargando datos:', error);
       } finally {
@@ -47,6 +41,21 @@ function App() {
     loadData();
     return () => { cancelled = true; clearTimeout(timeout); };
   }, []);
+
+  // Re-sync sealed orders whenever the active period changes (mount, or after closing a period).
+  // This prevents the previous period's orders from lingering and blocks double-charging on re-close.
+  useEffect(() => {
+    if (!period?.id) { setSealed({}); return; }
+    let cancelled = false;
+    getSealedOrders(period.id).then(orders => {
+      if (cancelled) return;
+      const map = {};
+      orders.forEach(o => { map[o.family_id] = o; });
+      setSealed(map);
+      setCarts({});
+    });
+    return () => { cancelled = true; };
+  }, [period?.id]);
 
   const login = u => setUser(u);
   const logout = () => setUser(null);
@@ -87,11 +96,13 @@ function App() {
 
   if (loading) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center', fontSize: '18px', background: '#f0f7f0', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div>
-          <div style={{ fontSize: '40px', marginBottom: '1rem' }}>🛒</div>
-          <p style={{ color: '#4CAF50', fontWeight: 500 }}>Cargando Cooperativa...</p>
-          <p style={{ color: '#aaa', fontSize: '12px', marginTop: '8px' }}>Conectando con la base de datos...</p>
+      <div style={{ padding: '2rem', textAlign: 'center', fontSize: '18px', background: 'linear-gradient(160deg, #f0f7f0 0%, #e3f2e3 100%)', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ animation: 'fadeIn 0.4s ease both' }}>
+          <div className="coop-spinner" />
+          <div style={{ fontSize: '34px', marginBottom: '0.5rem' }} className="pulse-emoji">🛒</div>
+          <p style={{ color: '#2e7d32', fontWeight: 600, margin: 0 }}>Cargando Cooperativa</p>
+          <div className="coop-loadbar" />
+          <p style={{ color: '#9bbf9b', fontSize: '12px', marginTop: '10px' }}>Conectando con la base de datos…</p>
         </div>
       </div>
     );
@@ -164,8 +175,8 @@ function Welcome({ families, onLogin, period }) {
     const isAdmin = loginFam.role === 'admin';
     const color = isAdmin ? '#1565c0' : '#4CAF50';
     return (
-      <div style={{ background: '#f0f7f0', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-        <div style={{ background: 'white', borderRadius: '16px', padding: '2rem', width: '100%', maxWidth: '340px', boxShadow: '0 8px 32px rgba(0,0,0,0.10)' }}>
+      <div style={{ background: 'linear-gradient(160deg, #f0f7f0 0%, #e6f2e6 55%, #e0f0ea 100%)', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+        <div className="modal-card" style={{ background: 'white', borderRadius: '16px', padding: '2rem', width: '100%', maxWidth: '340px', boxShadow: '0 12px 40px rgba(45,90,45,0.14)' }}>
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div style={{ width: 64, height: 64, borderRadius: '50%', background: color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', fontWeight: 700, margin: '0 auto 12px' }}>{loginFam.initials}</div>
             <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 6px', color: '#222' }}>{loginFam.name}</h2>
@@ -214,10 +225,10 @@ function Welcome({ families, onLogin, period }) {
   }
 
   return (
-    <div style={{ padding: '2rem', background: '#f0f7f0', minHeight: '100vh' }}>
-      <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-        <div style={{ fontSize: '48px', marginBottom: '12px' }}>🛒</div>
-        <h1 style={{ fontSize: '28px', marginBottom: '8px', fontWeight: 700, color: '#2d5a2d' }}>Cooperativa de Compras</h1>
+    <div style={{ padding: '2rem', background: 'linear-gradient(160deg, #f0f7f0 0%, #e6f2e6 55%, #e0f0ea 100%)', minHeight: '100vh' }}>
+      <div style={{ textAlign: 'center', marginBottom: '3rem', animation: 'fadeInUp 0.5s ease both' }}>
+        <div style={{ fontSize: '48px', marginBottom: '12px' }} className="pulse-emoji">🛒</div>
+        <h1 style={{ fontSize: '28px', marginBottom: '8px', fontWeight: 700, color: '#2d5a2d', letterSpacing: '-0.02em' }}>Cooperativa de Compras</h1>
         <p style={{ color: '#666', margin: 0, fontSize: '14px' }}>{period?.label} · {period?.month}</p>
       </div>
 
@@ -348,7 +359,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
     await updateFamilyBalance(user.id, newBal);
     setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: newBal } : f));
   };
-  const cats = ['all', ...new Set(products.map(p => p.category))];
+  const cats = ['all', ...new Set(products.map(p => p.category).filter(Boolean))];
   const vis = useMemo(() =>
     products.filter(p => (cat === 'all' || p.category === cat) && (!srch || p.name.toLowerCase().includes(srch.toLowerCase()) || p.provider.toLowerCase().includes(srch.toLowerCase()))),
     [cat, srch, products]
@@ -372,7 +383,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   return (
     <div style={{ background: '#f0f7f0', minHeight: '100vh' }}>
       {/* Header */}
-      <div style={{ padding: '0.75rem 1rem', background: 'white', borderBottom: '1px solid #dde8dd', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <div style={{ padding: '0.75rem 1rem', background: 'linear-gradient(180deg, #ffffff 0%, #f6faf6 100%)', borderBottom: '1px solid #dde8dd', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 12px rgba(45,90,45,0.06)', position: 'sticky', top: 0, zIndex: 30, backdropFilter: 'saturate(1.2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '20px' }}>🛒</span>
           <div>
@@ -435,7 +446,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
         ))}
       </div>
 
-      <div style={{ padding: '1rem' }}>
+      <div style={{ padding: '1rem' }} className="tab-panel" key={tab}>
         {/* CATÁLOGO */}
         {tab === 'catalog' && (
           <div>
@@ -521,8 +532,8 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
 
             {/* MODAL RESERVA BODEGA */}
             {reservingItem && (
-              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
-                <div style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', width: '100%', maxWidth: '320px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
+              <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
+                <div className="modal-card" style={{ background: 'white', borderRadius: '16px', padding: '1.5rem', width: '100%', maxWidth: '320px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}>
                   <p style={{ fontSize: '16px', fontWeight: 700, margin: '0 0 4px', color: '#1565c0' }}>🏪 Reservar de Bodega</p>
                   <p style={{ fontSize: '13px', color: '#555', margin: '0 0 1rem' }}>{reservingItem.product_name} — ${parseInt(reservingItem.price).toLocaleString('es-CL')} /{reservingItem.unit}</p>
                   <label style={{ fontSize: '12px', color: '#666', display: 'block', marginBottom: '6px' }}>
@@ -840,6 +851,8 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
         </div>
         <FamilyApp
           user={hacerPedidoFam}
+          families={families}
+          setFamilies={setFamilies}
           products={products}
           sealed={sealed}
           sealOrderLocal={sealOrderLocal}
@@ -856,7 +869,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
 
   return (
     <div style={{ background: '#f0f7f0', minHeight: '100vh' }}>
-      <div style={{ padding: '0.75rem 1rem', background: 'white', borderBottom: '1px solid #dde8dd', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <div style={{ padding: '0.75rem 1rem', background: 'linear-gradient(180deg, #ffffff 0%, #f6faf6 100%)', borderBottom: '1px solid #dde8dd', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 12px rgba(45,90,45,0.06)', position: 'sticky', top: 0, zIndex: 30, backdropFilter: 'saturate(1.2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '20px' }}>🛒</span>
           <div>
@@ -887,7 +900,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
         </div>
       </div>
 
-      <div style={{ padding: '1rem' }}>
+      <div style={{ padding: '1rem' }} className="tab-panel" key={tab}>
         {tab === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
         {tab === 'analitica' && <AdminAnalytics families={families} products={products} />}
         {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}

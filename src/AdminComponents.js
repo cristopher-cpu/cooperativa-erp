@@ -5,9 +5,11 @@ import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, create
 
 export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
   const [expandedFam, setExpandedFam] = useState(null);
-  const sc = Object.keys(sealed).length;
-  const ret = Object.values(sealed).filter(o => o.retired).length;
-  const tot = Object.values(sealed).reduce((s, o) => s + (o.total || 0) + cargo, 0);
+  // Only count orders belonging to actual familias (excludes an admin's own "Mi pedido")
+  const famSealed = Object.entries(sealed).filter(([fid]) => families.some(f => f.id === fid));
+  const sc = famSealed.length;
+  const ret = famSealed.filter(([, o]) => o.retired).length;
+  const tot = famSealed.reduce((s, [, o]) => s + (o.total || 0) + cargo, 0);
   const pendientes = families.filter(f => !sealed[f.id]);
 
   const getItems = (ord) => {
@@ -366,6 +368,19 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
   };
 
   const handleDelete = async (id) => {
+    const entry = entries.find(e => e.id === id);
+    // If this movement adjusted a family's balance, reverse it so the balance stays correct
+    if (entry && entry.family_id) {
+      const fam = fams.find(f => f.id === entry.family_id);
+      const who = entry.family_name || (fam && fam.name) || 'la familia';
+      if (!window.confirm(`Este movimiento afectó el saldo de ${who}. Al eliminarlo se revertirá ese ajuste. ¿Continuar?`)) return;
+      if (fam) {
+        const reverse = entry.type === 'ingreso' ? -(entry.amount || 0) : (entry.amount || 0);
+        const nuevoSaldo = (fam.balance || 0) + reverse;
+        await updateFamilyBalance(entry.family_id, nuevoSaldo);
+        if (setFamilies) setFamilies(p => p.map(f => f.id === entry.family_id ? { ...f, balance: nuevoSaldo } : f));
+      }
+    }
     await deleteCashFlowEntry(id);
     setEntries(p => p.filter(e => e.id !== id));
   };
@@ -378,6 +393,12 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
     setEditCargo(false);
     setSavingCargo(false);
   };
+
+  if (!period) return (
+    <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem' }}>
+      <p style={{ fontSize: '13px', color: '#e65100', margin: 0 }}>No hay período activo. Crea uno desde la pestaña <strong>Período</strong> para registrar flujo de caja.</p>
+    </div>
+  );
 
   return (
     <div>
@@ -899,7 +920,7 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
   const [expandedHistory, setExpandedHistory] = useState(null);
 
   const na = families.filter(f => f.role === 'familia');
-  const sc = Object.keys(sealed).length;
+  const sc = Object.keys(sealed).filter(fid => na.some(f => f.id === fid)).length;
   const pct = na.length > 0 ? Math.round(sc / na.length * 100) : 0;
 
   useEffect(() => {
@@ -1437,12 +1458,15 @@ export function AdminAnalytics({ families = [], products = [] }) {
   const prodCat = useMemo(() => { const m = {}; products.forEach(p => { m[p.id] = p.category; }); return m; }, [products]);
   const cargoByPeriod = useMemo(() => { const m = {}; allPeriods.forEach(p => { m[p.id] = p.fixed_charge != null ? p.fixed_charge : 4000; }); return m; }, [allPeriods]);
 
-  // Enrich every order with cargo, gmv, parsed items and its time bucket
-  const orders = useMemo(() => allOrders.map(o => {
-    const cargo = cargoByPeriod[o.period_id] != null ? cargoByPeriod[o.period_id] : 4000;
-    const b = bucketOf(o.sealed_at, granularity);
-    return { ...o, cargo, items: parseOrderItems(o), gmv: (o.total || 0) + cargo, bucketKey: b.key, bucketLabel: b.label };
-  }), [allOrders, cargoByPeriod, granularity]);
+  // Enrich every order with cargo, gmv, parsed items and its time bucket.
+  // Exclude admin-placed orders so family metrics (participación, rankings) stay accurate.
+  const orders = useMemo(() => allOrders
+    .filter(o => (famById[o.family_id] && famById[o.family_id].role) !== 'admin')
+    .map(o => {
+      const cargo = cargoByPeriod[o.period_id] != null ? cargoByPeriod[o.period_id] : 4000;
+      const b = bucketOf(o.sealed_at, granularity);
+      return { ...o, cargo, items: parseOrderItems(o), gmv: (o.total || 0) + cargo, bucketKey: b.key, bucketLabel: b.label };
+    }), [allOrders, cargoByPeriod, granularity, famById]);
 
   const buckets = useMemo(() => {
     const map = new Map();
@@ -1739,8 +1763,8 @@ export function AdminAnalytics({ families = [], products = [] }) {
       {/* KPI grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', marginBottom: '0.5rem' }}>
         {kpis.map(k => (
-          <div key={k.id} onClick={() => setExpandedKpi(expandedKpi === k.id ? null : k.id)}
-            style={{ padding: '0.9rem', background: k.bg, borderRadius: '10px', border: `1px solid ${expandedKpi === k.id ? k.color : k.color + '22'}`, cursor: 'pointer', transition: 'transform 0.1s' }}>
+          <div key={k.id} className="lift" onClick={() => setExpandedKpi(expandedKpi === k.id ? null : k.id)}
+            style={{ padding: '0.9rem', background: k.bg, borderRadius: '10px', border: `1px solid ${expandedKpi === k.id ? k.color : k.color + '22'}`, cursor: 'pointer' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <span style={{ fontSize: '18px' }}>{k.icon}</span>
               <span style={{ fontSize: '9px', color: k.color, opacity: 0.7 }}>{expandedKpi === k.id ? '▲' : 'ⓘ'}</span>

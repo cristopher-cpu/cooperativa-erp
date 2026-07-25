@@ -1,3 +1,19 @@
+/* ══════════════════════════════════════════════════════════════════════
+   Cooperativa ERP — global polish, motion & micro-interactions
+   Estilos inline manejan color/layout; aquí sumamos transiciones,
+   animaciones y "onda tecnológica" de forma global y liviana.
+   ══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --coop-green: #4CAF50;
+  --coop-green-dark: #2e7d32;
+  --coop-blue: #1565c0;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+* { scroll-behavior: smooth; }
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -7,10 +23,169 @@ body {
   background-color: #f0f7f0;
 }
 
+button { font-family: inherit; }
+input, select, textarea { font-family: inherit; }
+
+/* ── Selección de texto con acento de marca ── */
+::selection { background: rgba(76, 175, 80, 0.25); }
+
+/* ── Scrollbar fina y moderna ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #b5d6b5 transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #c8e6c9, #a5d6a7);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover { background: #81c784; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   BOTONES — tacto físico: se elevan al pasar el mouse, se hunden al click
+   (transform/filter/box-shadow no se definen inline, así que aplican bien)
+   ══════════════════════════════════════════════════════════════════════ */
 button {
-  font-family: inherit;
+  transition: transform 0.18s var(--ease),
+              box-shadow 0.18s var(--ease),
+              filter 0.18s var(--ease),
+              background-color 0.18s var(--ease),
+              border-color 0.18s var(--ease);
+  will-change: transform;
+}
+button:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  filter: brightness(1.04) saturate(1.05);
+}
+button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  filter: brightness(0.98);
+}
+button:disabled { cursor: not-allowed !important; opacity: 0.65; }
+
+/* Botones con foco accesible por teclado */
+button:focus-visible {
+  outline: 2px solid var(--coop-blue);
+  outline-offset: 2px;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   INPUTS / SELECT — anillo de foco suave (box-shadow no suele ir inline)
+   ══════════════════════════════════════════════════════════════════════ */
 input, select, textarea {
-  font-family: inherit;
+  transition: box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+  outline: none;
+}
+input:focus, select:focus, textarea:focus {
+  box-shadow: 0 0 0 3.5px rgba(76, 175, 80, 0.18);
+}
+input[type="number"]:focus, select:focus {
+  box-shadow: 0 0 0 3.5px rgba(21, 101, 192, 0.16);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ANIMACIONES DE ENTRADA
+   ══════════════════════════════════════════════════════════════════════ */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.08); opacity: 0.85; }
+}
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+/* Panel de contenido: entra suave cada vez que cambias de pestaña
+   (se combina con key={tab} en el JSX para re-disparar la animación) */
+.tab-panel {
+  animation: fadeInUp 0.32s var(--ease) both;
+}
+
+/* Modales / overlays */
+.modal-overlay { animation: fadeIn 0.2s var(--ease) both; }
+.modal-card { animation: scaleIn 0.28s var(--ease-spring) both; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   TARJETAS ELEVABLES — añade className="lift" para hover con elevación
+   ══════════════════════════════════════════════════════════════════════ */
+.lift {
+  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease);
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.10) !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   LOADING — spinner tecnológico
+   ══════════════════════════════════════════════════════════════════════ */
+.coop-spinner {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 1.25rem;
+  border-radius: 50%;
+  border: 4px solid #d7ecd7;
+  border-top-color: var(--coop-green);
+  border-right-color: var(--coop-green);
+  animation: spin 0.85s linear infinite;
+}
+.pulse-emoji {
+  display: inline-block;
+  animation: floaty 2.4s var(--ease) infinite;
+}
+
+/* Barra de progreso indeterminada (shimmer) */
+.coop-loadbar {
+  height: 3px;
+  width: 180px;
+  margin: 1rem auto 0;
+  border-radius: 3px;
+  background: #e0efe0;
+  overflow: hidden;
+  position: relative;
+}
+.coop-loadbar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--coop-green), transparent);
+  animation: coop-slide 1.2s var(--ease) infinite;
+}
+@keyframes coop-slide {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   TABS — indicador con transición fluida y realce al pasar el mouse
+   ══════════════════════════════════════════════════════════════════════ */
+.tab-panel h1, .tab-panel h2, .tab-panel h3 { letter-spacing: -0.01em; }
+
+/* Respeta a quienes prefieren menos movimiento */
+@media (prefers-reduced-motion: reduce) {
+  *, button, .tab-panel, .modal-card, .lift {
+    animation: none !important;
+    transition: none !important;
+  }
+  button:hover:not(:disabled), .lift:hover { transform: none; }
 }
