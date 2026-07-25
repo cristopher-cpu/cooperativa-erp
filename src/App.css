@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════════════════════════════════
-   Cooperativa ERP — global polish, motion & micro-interactions
-   Estilos inline manejan color/layout; aquí sumamos transiciones,
-   animaciones y "onda tecnológica" de forma global y liviana.
+   Cooperativa ERP — motion & micro-interactions
+   Los estilos inline manejan color/layout; aquí sumamos animaciones
+   claramente visibles y "onda tecnológica".
    ══════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -9,6 +9,7 @@
   --coop-green-dark: #2e7d32;
   --coop-blue: #1565c0;
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -26,166 +27,162 @@ body {
 button { font-family: inherit; }
 input, select, textarea { font-family: inherit; }
 
-/* ── Selección de texto con acento de marca ── */
-::selection { background: rgba(76, 175, 80, 0.25); }
+::selection { background: rgba(76, 175, 80, 0.28); }
 
 /* ── Scrollbar fina y moderna ── */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #b5d6b5 transparent;
-}
-*::-webkit-scrollbar { width: 8px; height: 8px; }
+* { scrollbar-width: thin; scrollbar-color: #b5d6b5 transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #c8e6c9, #a5d6a7);
+  background: linear-gradient(180deg, #c8e6c9, #81c784);
   border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
-*::-webkit-scrollbar-thumb:hover { background: #81c784; }
+*::-webkit-scrollbar-thumb:hover { background: #66bb6a; background-clip: padding-box; }
 
 /* ══════════════════════════════════════════════════════════════════════
-   BOTONES — tacto físico: se elevan al pasar el mouse, se hunden al click
-   (transform/filter/box-shadow no se definen inline, así que aplican bien)
+   KEYFRAMES
    ══════════════════════════════════════════════════════════════════════ */
-button {
-  transition: transform 0.18s var(--ease),
-              box-shadow 0.18s var(--ease),
-              filter 0.18s var(--ease),
-              background-color 0.18s var(--ease),
-              border-color 0.18s var(--ease);
-  will-change: transform;
+@keyframes tabIn {
+  from { opacity: 0; transform: translateY(24px) scale(0.975); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
-button:hover:not(:disabled) {
-  transform: translateY(-1.5px);
-  filter: brightness(1.04) saturate(1.05);
-}
-button:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
-  filter: brightness(0.98);
-}
-button:disabled { cursor: not-allowed !important; opacity: 0.65; }
-
-/* Botones con foco accesible por teclado */
-button:focus-visible {
-  outline: 2px solid var(--coop-blue);
-  outline-offset: 2px;
-}
-
-/* ══════════════════════════════════════════════════════════════════════
-   INPUTS / SELECT — anillo de foco suave (box-shadow no suele ir inline)
-   ══════════════════════════════════════════════════════════════════════ */
-input, select, textarea {
-  transition: box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
-  outline: none;
-}
-input:focus, select:focus, textarea:focus {
-  box-shadow: 0 0 0 3.5px rgba(76, 175, 80, 0.18);
-}
-input[type="number"]:focus, select:focus {
-  box-shadow: 0 0 0 3.5px rgba(21, 101, 192, 0.16);
-}
-
-/* ══════════════════════════════════════════════════════════════════════
-   ANIMACIONES DE ENTRADA
-   ══════════════════════════════════════════════════════════════════════ */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.96); }
+  from { opacity: 0; transform: scale(0.9); }
   to   { opacity: 1; transform: scale(1); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%      { transform: scale(1.08); opacity: 0.85; }
-}
 @keyframes floaty {
   0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-6px); }
+  50%      { transform: translateY(-7px); }
 }
-@keyframes shimmer {
-  0%   { background-position: -400px 0; }
-  100% { background-position: 400px 0; }
+@keyframes coop-slide {
+  0%   { left: -45%; }
+  100% { left: 100%; }
 }
-
-/* Panel de contenido: entra suave cada vez que cambias de pestaña
-   (se combina con key={tab} en el JSX para re-disparar la animación) */
-.tab-panel {
-  animation: fadeInUp 0.32s var(--ease) both;
+@keyframes popBadge {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.25); }
+  100% { transform: scale(1); }
 }
-
-/* Modales / overlays */
-.modal-overlay { animation: fadeIn 0.2s var(--ease) both; }
-.modal-card { animation: scaleIn 0.28s var(--ease-spring) both; }
 
 /* ══════════════════════════════════════════════════════════════════════
-   TARJETAS ELEVABLES — añade className="lift" para hover con elevación
+   BOTONES — tacto físico claramente visible
    ══════════════════════════════════════════════════════════════════════ */
-.lift {
-  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease);
+button {
+  transition: transform 0.16s var(--ease-out),
+              box-shadow 0.2s var(--ease),
+              filter 0.16s var(--ease),
+              background-color 0.2s var(--ease),
+              border-color 0.2s var(--ease);
+  will-change: transform;
 }
+button:hover:not(:disabled) {
+  transform: translateY(-2.5px) scale(1.025);
+  filter: brightness(1.06) saturate(1.06);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.14);
+}
+button:active:not(:disabled) {
+  transform: translateY(0) scale(0.95);
+  filter: brightness(0.97);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  transition-duration: 0.06s;
+}
+button:disabled { cursor: not-allowed !important; opacity: 0.6; }
+button:focus-visible { outline: 2px solid var(--coop-blue); outline-offset: 2px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   INPUTS / SELECT — anillo de foco notorio
+   ══════════════════════════════════════════════════════════════════════ */
+input, select, textarea {
+  transition: box-shadow 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.15s var(--ease);
+  outline: none;
+}
+input:focus, select:focus, textarea:focus {
+  box-shadow: 0 0 0 4px rgba(76, 175, 80, 0.22);
+}
+input[type="number"]:focus, select:focus {
+  box-shadow: 0 0 0 4px rgba(21, 101, 192, 0.20);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ENTRADA DE PESTAÑAS + CASCADA DE TARJETAS
+   El contenedor .tab-panel se remonta con key={tab}, así que la animación
+   se re-dispara en CADA cambio de pestaña. Sus tarjetas entran en cascada.
+   ══════════════════════════════════════════════════════════════════════ */
+.tab-panel { animation: fadeIn 0.25s var(--ease) both; }
+
+.tab-panel > div > *,
+.stagger-in > * {
+  animation: tabIn 0.5s var(--ease-out) both;
+}
+/* Escalonado (stagger) para que las tarjetas caigan una tras otra */
+.tab-panel > div > *:nth-child(1),  .stagger-in > *:nth-child(1) { animation-delay: 0.03s; }
+.tab-panel > div > *:nth-child(2),  .stagger-in > *:nth-child(2) { animation-delay: 0.08s; }
+.tab-panel > div > *:nth-child(3),  .stagger-in > *:nth-child(3) { animation-delay: 0.13s; }
+.tab-panel > div > *:nth-child(4),  .stagger-in > *:nth-child(4) { animation-delay: 0.18s; }
+.tab-panel > div > *:nth-child(5),  .stagger-in > *:nth-child(5) { animation-delay: 0.23s; }
+.tab-panel > div > *:nth-child(6),  .stagger-in > *:nth-child(6) { animation-delay: 0.28s; }
+.tab-panel > div > *:nth-child(n+7),.stagger-in > *:nth-child(n+7) { animation-delay: 0.32s; }
+
+/* Modales / overlays */
+.modal-overlay { animation: fadeIn 0.22s var(--ease) both; }
+.modal-card { animation: scaleIn 0.32s var(--ease-spring) both; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   TARJETAS ELEVABLES — className="lift"
+   ══════════════════════════════════════════════════════════════════════ */
+.lift { transition: transform 0.24s var(--ease-out), box-shadow 0.24s var(--ease-out); }
 .lift:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.10) !important;
+  transform: translateY(-6px) scale(1.015);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.15) !important;
+  z-index: 2;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
    LOADING — spinner tecnológico
    ══════════════════════════════════════════════════════════════════════ */
 .coop-spinner {
-  width: 54px;
-  height: 54px;
+  width: 56px; height: 56px;
   margin: 0 auto 1.25rem;
   border-radius: 50%;
   border: 4px solid #d7ecd7;
   border-top-color: var(--coop-green);
   border-right-color: var(--coop-green);
-  animation: spin 0.85s linear infinite;
+  animation: spin 0.8s linear infinite;
 }
-.pulse-emoji {
-  display: inline-block;
-  animation: floaty 2.4s var(--ease) infinite;
-}
-
-/* Barra de progreso indeterminada (shimmer) */
+.pulse-emoji { display: inline-block; animation: floaty 2.4s var(--ease) infinite; }
 .coop-loadbar {
-  height: 3px;
-  width: 180px;
+  height: 4px; width: 200px;
   margin: 1rem auto 0;
-  border-radius: 3px;
+  border-radius: 4px;
   background: #e0efe0;
   overflow: hidden;
   position: relative;
 }
 .coop-loadbar::after {
   content: '';
-  position: absolute;
-  inset: 0;
-  width: 40%;
-  border-radius: 3px;
+  position: absolute; inset: 0;
+  width: 45%; border-radius: 4px;
   background: linear-gradient(90deg, transparent, var(--coop-green), transparent);
-  animation: coop-slide 1.2s var(--ease) infinite;
+  animation: coop-slide 1.1s var(--ease) infinite;
 }
-@keyframes coop-slide {
-  0%   { left: -40%; }
-  100% { left: 100%; }
-}
+
+/* Insignia del carrito que "salta" al aparecer */
+.badge-pop { animation: popBadge 0.35s var(--ease-spring) both; }
 
 /* ══════════════════════════════════════════════════════════════════════
-   TABS — indicador con transición fluida y realce al pasar el mouse
+   ACCESIBILIDAD — si el usuario prefiere menos movimiento, mantenemos un
+   fade suave (sin desplazamientos) en vez de apagar todo por completo.
    ══════════════════════════════════════════════════════════════════════ */
-.tab-panel h1, .tab-panel h2, .tab-panel h3 { letter-spacing: -0.01em; }
-
-/* Respeta a quienes prefieren menos movimiento */
 @media (prefers-reduced-motion: reduce) {
-  *, button, .tab-panel, .modal-card, .lift {
-    animation: none !important;
-    transition: none !important;
+  .tab-panel > div > *, .stagger-in > *, .modal-card {
+    animation: fadeIn 0.3s ease both !important;
   }
-  button:hover:not(:disabled), .lift:hover { transform: none; }
+  .coop-spinner { animation: spin 1.1s linear infinite !important; }
+  .pulse-emoji { animation: none !important; }
+  button:hover:not(:disabled) { transform: none; box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+  .lift:hover { transform: none; }
 }

@@ -1673,10 +1673,10 @@ export function AdminAnalytics({ families = [], products = [] }) {
       footer: ['Balance', clp(balanceCaja)]
     },
     {
-      id: 'deuda', icon: '⚠️', label: 'Deuda total (actual)', value: clp(deudaTotal), color: '#c62828', bg: '#ffebee', global: true,
+      id: 'deuda', icon: '⚠️', label: 'Saldos pendientes (total)', value: clp(deudaTotal), color: '#c62828', bg: '#ffebee', global: true,
       definition: 'Suma de los saldos pendientes de todas las familias, en este momento (no depende del rango).',
       formula: 'Σ |saldo| de familias con saldo negativo.',
-      cols: ['Familia', 'Deuda'],
+      cols: ['Familia', 'Saldo pendiente'],
       rows: deudaFams.map(f => [f.name, clp(Math.abs(f.balance || 0))]),
       footer: ['Total', clp(deudaTotal)]
     },
@@ -1695,7 +1695,7 @@ export function AdminAnalytics({ families = [], products = [] }) {
   if (topProdValue[0]) insights.push({ ic: '⭐', txt: `Producto estrella: **${topProdValue[0].label}** con ${clp(topProdValue[0].value)} en ventas.` });
   if (topProv[0]) insights.push({ ic: '🏭', txt: `Proveedor principal: **${topProv[0].label}** concentra ${clp(topProv[0].value)} de los pedidos.` });
   if (topFam[0]) insights.push({ ic: '🛒', txt: `Familia que más compra: **${topFam[0].label}** con ${clp(topFam[0].value)}.` });
-  if (debtRank[0]) insights.push({ ic: '⚠️', txt: `Mayor deuda: **${debtRank[0].label}** debe ${clp(debtRank[0].value)}. Deuda total de la cooperativa: ${clp(deudaTotal)}.` });
+  if (debtRank[0]) insights.push({ ic: '⚠️', txt: `Mayor saldo pendiente: **${debtRank[0].label}** debe ${clp(debtRank[0].value)}. Saldos pendientes de la cooperativa: ${clp(deudaTotal)}.` });
   if (sealedCount > 0) insights.push({ ic: '📊', txt: `Participación de ${Math.round(participation)}%: ${uniqueFams} de ${famList.length} familias compraron en ${rangeLabel}.` });
 
   const renderInsight = (txt) => {
@@ -1843,7 +1843,7 @@ export function AdminAnalytics({ families = [], products = [] }) {
         <RankingCard icon="🏭" title="Top proveedores" subtitle="Por valor total solicitado" color="#6a1b9a" accentBg="#f7f0fa" rows={topProv} />
         <RankingCard icon="🏷️" title="Top categorías" subtitle="Por valor total" color="#00838f" accentBg="#e9f8fa" rows={topCat} />
         <RankingCard icon="🛒" title="Familias que más compran" subtitle="Por valor total de pedidos" color="#e65100" accentBg="#fdf3ea" rows={topFam} />
-        <RankingCard icon="⚠️" title="Familias con más deuda" subtitle="Saldo pendiente actual" color="#c62828" accentBg="#fdeeee" rows={debtRank} emptyMsg="Ninguna familia tiene deuda 🎉" />
+        <RankingCard icon="⚠️" title="Familias con más saldo pendiente" subtitle="Saldo pendiente actual" color="#c62828" accentBg="#fdeeee" rows={debtRank} emptyMsg="Ninguna familia tiene saldo pendiente 🎉" />
       </div>
 
       <p style={{ fontSize: '11px', color: '#bbb', textAlign: 'center', margin: '1.5rem 0 0' }}>

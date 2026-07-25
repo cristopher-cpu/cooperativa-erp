@@ -233,7 +233,7 @@ function Welcome({ families, onLogin, period }) {
       </div>
 
       <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Administración</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
+      <div className="stagger-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
         {admins.map(f => (
           <button key={f.id} onClick={() => selectFam(f)}
             style={{ padding: '1.25rem', border: '1.5px solid #2196F3', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(33,150,243,0.08)', display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -248,7 +248,7 @@ function Welcome({ families, onLogin, period }) {
       </div>
 
       <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Familias ({fams.length})</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
+      <div className="stagger-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
         {fams.map(f => (
           <button key={f.id} onClick={() => selectFam(f)}
             style={{ padding: '1rem 1.25rem', border: '1px solid #dde8dd', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
@@ -476,7 +476,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                 const qty = ord ? (ordItems.find(x => x.id === pr.id) || {}).qty || 0 : (cart[pr.id] || 0);
                 const lk = !!ord || !puedeOrdenar;
                 return (
-                  <div key={pr.id} style={{ padding: '0.9rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', opacity: pr.in_stock ? 1 : 0.55, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                  <div key={pr.id} className="lift" style={{ padding: '0.9rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', opacity: pr.in_stock ? 1 : 0.55, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                     <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '4px', background: pr.in_stock ? '#e8f5e9' : '#ffebee', color: pr.in_stock ? '#2e7d32' : '#c62828' }}>{pr.in_stock ? '✓ Disponible' : 'Sin stock'}</span>
                     <p style={{ fontWeight: 600, fontSize: '12px', lineHeight: 1.35, marginTop: '8px', marginBottom: '3px', color: '#222' }}>{pr.name}</p>
                     <p style={{ fontSize: '10px', color: '#888', marginBottom: '4px' }}>{pr.unit} · {pr.provider}</p>
@@ -507,7 +507,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                     const remaining = getBodegaRemaining(item.id);
                     const myRes = myReservations.find(r => r.bodega_id === item.id);
                     return (
-                      <div key={item.id} style={{ padding: '0.9rem', background: 'white', border: '1.5px solid #90caf9', borderRadius: '8px', boxShadow: '0 1px 3px rgba(21,101,192,0.07)' }}>
+                      <div key={item.id} className="lift" style={{ padding: '0.9rem', background: 'white', border: '1.5px solid #90caf9', borderRadius: '8px', boxShadow: '0 1px 3px rgba(21,101,192,0.07)' }}>
                         <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '4px', background: '#e3f2fd', color: '#1565c0' }}>🏪 Bodega</span>
                         <p style={{ fontWeight: 600, fontSize: '12px', lineHeight: 1.35, marginTop: '8px', marginBottom: '3px', color: '#222' }}>{item.product_name}</p>
                         <p style={{ fontSize: '10px', color: '#888', marginBottom: '4px' }}>{item.unit} · quedan: {remaining}</p>
