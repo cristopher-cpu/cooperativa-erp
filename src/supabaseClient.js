@@ -217,6 +217,12 @@ export async function updateFamilyPin(familyId, pin) {
   return data;
 }
 
+export async function updateFamilyRole(familyId, role) {
+  const { data, error } = await supabase.from('families').update({ role }).eq('id', familyId).select().single();
+  if (error) console.error('updateFamilyRole error:', error.message);
+  return data;
+}
+
 export async function getBodega(periodId) {
   const { data, error } = await supabase.from('bodega').select('*').eq('period_id', periodId).order('created_at', { ascending: true });
   if (error) { console.error('getBodega error:', error.message); return []; }

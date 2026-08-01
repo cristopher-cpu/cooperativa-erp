@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -650,6 +650,39 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
     setFamilies(p => p.map(f => f.id === fid ? { ...f, pin: null } : f));
   };
 
+  const [roleSavingId, setRoleSavingId] = useState(null);
+  const changeRole = async (f, newRole) => {
+    // Nunca dejar a la cooperativa sin administradores
+    if (newRole === 'familia' && admins.length <= 1) {
+      alert('No puedes quitar el rol al último administrador. Designa primero a otro administrador.');
+      return;
+    }
+    const isSelf = currentAdmin && currentAdmin.id === f.id;
+    let msg = newRole === 'admin'
+      ? `¿Promover a "${f.name}" a Administrador?\n\nTendrá acceso completo al panel de administración.`
+      : `¿Pasar a "${f.name}" de Administrador a Familia?\n\nPerderá el acceso al panel de administración.`;
+    if (newRole === 'familia' && isSelf) msg += '\n\n⚠ Te estás quitando el rol a ti mismo: perderás el acceso al cerrar sesión.';
+    if (!window.confirm(msg)) return;
+
+    setRoleSavingId(f.id);
+    const result = await updateFamilyRole(f.id, newRole);
+    if (result) {
+      setFamilies(p => p.map(x => x.id === f.id ? { ...x, role: newRole } : x));
+      if (currentAdmin) {
+        addAdminLog({
+          id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.name,
+          action: 'role_changed',
+          details: `${f.name}: ${newRole === 'admin' ? 'Familia → Administrador' : 'Administrador → Familia'}`
+        });
+      }
+    } else {
+      alert('Error al cambiar el rol. Intenta nuevamente.');
+    }
+    setRoleSavingId(null);
+  };
+
   const admins = families.filter(f => f.role === 'admin');
   const fams = families.filter(f => f.role === 'familia');
   const filtered = fams.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
@@ -743,7 +776,14 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                     <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
                   </div>
                 </div>
-                <span style={{ fontSize: '9px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: '#1565c0', color: 'white', flexShrink: 0 }}>ADMIN</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <span style={{ fontSize: '9px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: '#1565c0', color: 'white' }}>ADMIN</span>
+                  <button onClick={() => changeRole(f, 'familia')} disabled={roleSavingId === f.id}
+                    title="Quitar rol de administrador y dejarlo como Familia"
+                    style={{ fontSize: '10px', padding: '4px 10px', background: '#fff5f5', color: '#c62828', border: '1px solid #ffcdd2', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
+                    {roleSavingId === f.id ? '...' : '⬇ Pasar a Familia'}
+                  </button>
+                </div>
               </div>
               {renderPinRow(f)}
             </div>
@@ -762,7 +802,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                 <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {sealed[f.id]
                 ? <span style={{ fontSize: '10px', fontWeight: 600, padding: '3px 7px', borderRadius: '6px', background: sealed[f.id].retired ? '#e8f5e9' : '#e3f2fd', color: sealed[f.id].retired ? '#2e7d32' : '#1565c0' }}>{sealed[f.id].retired ? '✓ Entregado' : '✓ Sellado'}</span>
                 : (
@@ -773,6 +813,11 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                 )
               }
               {f.balance !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : ''}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
+              <button onClick={() => changeRole(f, 'admin')} disabled={roleSavingId === f.id}
+                title="Promover a Administrador"
+                style={{ fontSize: '10px', padding: '4px 10px', background: '#e3f2fd', color: '#1565c0', border: '1px solid #90caf9', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
+                {roleSavingId === f.id ? '...' : '⬆ Hacer Admin'}
+              </button>
             </div>
           </div>
           {renderPinRow(f)}
@@ -1268,6 +1313,7 @@ export function AdminLogs() {
     period_dates_updated: { label: 'Fechas actualizadas', bg: '#e3f2fd', color: '#1565c0', ic: '📅' },
     period_closed:        { label: 'Período cerrado',     bg: '#fff3e0', color: '#e65100', ic: '🔒' },
     period_created:       { label: 'Período creado',      bg: '#e8f5e9', color: '#2e7d32', ic: '✅' },
+    role_changed:         { label: 'Cambio de rol',       bg: '#f3e5f5', color: '#6a1b9a', ic: '🔑' },
   };
 
   const filtered = filterAction === 'todos' ? logs : logs.filter(l => l.action === filterAction);
@@ -1277,7 +1323,7 @@ export function AdminLogs() {
   return (
     <div>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        {['todos', 'created_family', 'period_dates_updated', 'period_closed', 'period_created'].map(k => {
+        {['todos', 'created_family', 'role_changed', 'period_dates_updated', 'period_closed', 'period_created'].map(k => {
           const cfg = k === 'todos' ? null : actionConfig[k];
           const active = filterAction === k;
           return (
