@@ -890,15 +890,21 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [srch, setSrch] = useState('');
+  const [provSearch, setProvSearch] = useState('');
+  const [showProvDrop, setShowProvDrop] = useState(false);
 
   const CATS = ['Cereales', 'Legumbres', 'Semillas', 'Harinas', 'Té y Café', 'Aceites', 'Aseo', 'Dulces', 'Pan', 'Miel', 'Aliños'];
 
   // El proveedor se elige de la lista maestra, pero seguimos guardando su nombre
   // en products.provider: el catálogo y la búsqueda de las familias leen ese texto.
-  const providerFields = () => {
-    const pv = providers.find(p => p.id === form.provider_id);
-    return pv ? { provider_id: pv.id, provider: pv.name } : null;
-  };
+  const selectedProvider = providers.find(p => p.id === form.provider_id) || null;
+  const providerFields = () => selectedProvider ? { provider_id: selectedProvider.id, provider: selectedProvider.name } : null;
+
+  // Inactivos visibles solo si están ya asignados: no se ofrecen para productos nuevos
+  // pero tampoco desaparecen al editar uno viejo.
+  const provMatches = providers
+    .filter(p => p.active || p.id === form.provider_id)
+    .filter(p => !provSearch || p.name.toLowerCase().includes(provSearch.toLowerCase().trim()));
 
   const validate = () => {
     if (!form.name.trim() || !form.price || !form.unit) return 'Nombre, precio y unidad son obligatorios';
@@ -973,17 +979,48 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
                 {CATS.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <div>
+            {/* Buscador en vez de <select>: la lista de proveedores va a crecer. */}
+            <div style={{ position: 'relative' }}>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Proveedor *</label>
-              <select value={form.provider_id} onChange={e => { setForm(p => ({ ...p, provider_id: e.target.value })); setErr(''); }}
-                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }}>
-                <option value="">— Selecciona —</option>
-                {providers.filter(p => p.active || p.id === form.provider_id).map(p => (
-                  <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inactivo)'}</option>
-                ))}
-              </select>
+              {selectedProvider ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ flex: 1, minWidth: 0, padding: '7px 10px', border: '1px solid #4CAF50', borderRadius: '6px', background: '#f0f7f0', fontSize: '13px', color: '#2d5a2d', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    ✓ {selectedProvider.name}{selectedProvider.active ? '' : ' (inactivo)'}
+                  </div>
+                  <button type="button" onClick={() => { setForm(p => ({ ...p, provider_id: '' })); setProvSearch(''); setShowProvDrop(true); }}
+                    style={{ padding: '6px 10px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', color: '#666', whiteSpace: 'nowrap' }}>
+                    Cambiar
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input type="text" placeholder="Buscar proveedor..." value={provSearch}
+                    onChange={e => { setProvSearch(e.target.value); setShowProvDrop(true); setErr(''); }}
+                    onFocus={() => setShowProvDrop(true)}
+                    onBlur={() => setTimeout(() => setShowProvDrop(false), 150)}
+                    style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+                  {showProvDrop && (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.10)', zIndex: 100, maxHeight: '200px', overflowY: 'auto' }}>
+                      {provMatches.map(p => (
+                        <div key={p.id} onMouseDown={() => { setForm(f => ({ ...f, provider_id: p.id })); setProvSearch(''); setShowProvDrop(false); setErr(''); }}
+                          style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: 500 }}>{p.name}{p.active ? '' : ' (inactivo)'}</span>
+                          <span style={{ color: '#888', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                            {products.filter(x => x.provider_id === p.id).length} prod.
+                          </span>
+                        </div>
+                      ))}
+                      {provMatches.length === 0 && (
+                        <div style={{ padding: '10px', textAlign: 'center', color: '#aaa', fontSize: '12px' }}>
+                          {providers.length === 0 ? 'No hay proveedores cargados' : 'Sin resultados'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
               {providers.length === 0 && (
-                <p style={{ fontSize: '10px', color: '#c62828', margin: '3px 0 0' }}>No hay proveedores cargados. Créalos en la pestaña Proveedores.</p>
+                <p style={{ fontSize: '10px', color: '#c62828', margin: '3px 0 0' }}>Créalos primero en la pestaña Proveedores.</p>
               )}
             </div>
             <div>
