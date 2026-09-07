@@ -72,7 +72,7 @@ a lista. Perfiles acordados: **Admin**, **Proveedores**, **Recepción-Retiro**,
 
 ---
 
-## 3. La decisión pendiente que bloquea la Etapa 3
+## 3. Momento del pago — decidido
 
 Aparecieron **dos conceptos distintos** que el plan original confundía en uno:
 
@@ -90,14 +90,39 @@ Cuál de los dos primeros aplica depende de **cuándo pagan las familias**:
   gente pague**. Con eso, la mayoría de los faltantes desaparece porque el pedido
   sale ya corregido.
 
-**Sin resolver esto, la Etapa 3 no se puede diseñar.** Es la primera pregunta de la
-próxima sesión.
+### RESUELTO (6-sep-2026): el pago va DESPUÉS de la confirmación
+
+El nuevo orden del ciclo es:
+
+1. Las familias sellan sus pedidos.
+2. Cierra el período de pedidos.
+3. Sale la orden de compra a cada proveedor.
+4. Los proveedores confirman disponibilidad.
+5. **El sistema baja del pedido lo no disponible.**
+6. Recién entonces se le cobra a la familia, con el monto ya corregido.
+7. Entrega y retiro. Ahí siguen apareciendo faltantes y extras reales → saldo.
+
+Esto cambia el paso 05 del flujo documentado de la cooperativa (que junta pedido y
+pago) y **hay que avisarlo en las capacitaciones**: las socias están acostumbradas a
+transferir al momento de pedir.
+
+Consecuencias de diseño:
+
+- El pedido sellado deja de ser el monto final. Necesita un estado intermedio entre
+  "sellado" y "cobrado", y un monto ajustado además del original.
+- Hace falta una **fecha de cierre de confirmaciones**: si un proveedor no responde,
+  el cobro no puede quedar esperando indefinidamente. Decidir qué se asume por
+  defecto al vencer el plazo (¿que sí trae todo, o que no trae nada?).
+- Las familias deben poder **ver por qué su monto cambió** antes de pagar, o van a
+  desconfiar del número.
+- Los faltantes por confirmación (antes de pagar) y los del retiro (ya pagados)
+  conviven: son dos tipos distintos de ajuste sobre el mismo pedido.
 
 ---
 
 ## 4. Etapas siguientes
 
-### Etapa 3 — Faltantes y extras (bloqueada por lo anterior)
+### Etapa 3 — Faltantes, extras y cobro post-confirmación
 
 Tabla única de ajustes contra un pedido sellado, con campo de tipo. Alimenta los
 saldos con trazabilidad: hoy los saldos se editan a mano y **no queda registro de
