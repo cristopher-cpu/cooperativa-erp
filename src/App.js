@@ -7,6 +7,7 @@ import {
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
 import { AdminProveedores } from './AdminProveedores';
+import { AdminConsolidado } from './AdminConsolidado';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -835,6 +836,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
     { id: 'analitica', l: 'Analítica', ic: '📈' },
     { id: 'pedidos', l: 'Pedidos', ic: '📋' },
+    { id: 'consolidado', l: 'Consolidado', ic: '🧾' },
     { id: 'retiros', l: 'Retiros', ic: '🚚' },
     { id: 'flujo', l: 'Flujo Caja', ic: '💵' },
     { id: 'bodega', l: 'Bodega', ic: '🏪' },
@@ -910,6 +912,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         {tab === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
         {tab === 'analitica' && <AdminAnalytics families={families} products={products} />}
         {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
+        {tab === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} />}
         {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
         {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
         {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}

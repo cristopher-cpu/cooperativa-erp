@@ -358,3 +358,45 @@ export async function updateFamilyContacts(familyId, email, email2) {
   if (error) { console.error('updateFamilyContacts error:', error.message); return { error: error.message }; }
   return data;
 }
+
+// ─── ÓRDENES DE COMPRA ────────────────────────────────────────────────────────
+// El envío NO se hace desde el navegador: la clave de Brevo vive solo en el
+// servidor. Acá únicamente leemos el estado y llamamos a /api/enviar-orden.
+
+export async function getPurchaseOrders(periodId) {
+  const { data, error } = await supabase
+    .from('purchase_orders')
+    .select('*')
+    .eq('period_id', periodId)
+    .order('created_at', { ascending: false });
+  if (error) { console.error('getPurchaseOrders error:', error.message); return []; }
+  return data || [];
+}
+
+export async function deletePurchaseOrder(id) {
+  const { error } = await supabase.from('purchase_orders').delete().eq('id', id);
+  if (error) { console.error('deletePurchaseOrder error:', error.message); return { error: error.message }; }
+  return true;
+}
+
+// Llama a la función serverless. Devuelve { ok, ... } o { error }.
+export async function sendPurchaseOrder(payload) {
+  try {
+    const res = await fetch('/api/enviar-orden', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* respuesta no-JSON */ }
+    if (!res.ok) {
+      // Sin cuerpo JSON casi siempre significa que la función no existe todavía:
+      // pasa al correr `npm start`, que no ejecuta el directorio /api.
+      return { error: (body && body.error) || 'El servidor respondió ' + res.status + '. Si estás en npm start, usa `vercel dev` para probar el envío de correos.', guardada: body && body.guardada };
+    }
+    return body || { error: 'Respuesta vacía del servidor' };
+  } catch (e) {
+    return { error: 'No se pudo contactar al servidor: ' + e.message };
+  }
+}
