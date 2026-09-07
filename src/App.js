@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  getFamilies, getProducts, getSealedOrders, getPeriod,
+  getFamilies, getProducts, getSealedOrders, getPeriod, getProviders,
   sealOrder, markRetired, updateFamilyBalance,
   getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
 } from './supabaseClient';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
+import { AdminProveedores } from './AdminProveedores';
 
 function App() {
   const [families, setFamilies] = useState([]);
   const [products, setProducts] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [sealed, setSealed] = useState({});
   const [period, setPeriod] = useState(null);
   const [user, setUser] = useState(null);
@@ -22,11 +24,12 @@ function App() {
 
     async function loadData() {
       try {
-        const [fams, prods, per] = await Promise.all([getFamilies(), getProducts(), getPeriod()]);
+        const [fams, prods, per, provs] = await Promise.all([getFamilies(), getProducts(), getPeriod(), getProviders()]);
         if (cancelled) return;
         setFamilies(fams);
         setProducts(prods);
         setPeriod(per);
+        setProviders(provs);
         // Sealed orders load in a dedicated effect keyed on period.id (see below),
         // so they always re-sync when the active period changes (e.g. after closing one).
       } catch (error) {
@@ -120,6 +123,8 @@ function App() {
         setFamilies={setFamilies}
         products={products}
         setProducts={setProducts}
+        providers={providers}
+        setProviders={setProviders}
         sealed={sealed}
         setSealed={setSealed}
         period={period}
@@ -821,7 +826,7 @@ function SaldoFamilia({ user, ord, cargo, period }) {
 
 // ─── ADMIN APP ────────────────────────────────────────────────────────────────
 
-function AdminApp({ user, families, setFamilies, products, setProducts, sealed, setSealed, period, setPeriod, cargo, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
+function AdminApp({ user, families, setFamilies, products, setProducts, providers, setProviders, sealed, setSealed, period, setPeriod, cargo, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
   const [tab, setTab] = useState('dashboard');
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
   const na = families.filter(f => f.role === 'familia');
@@ -834,6 +839,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
     { id: 'flujo', l: 'Flujo Caja', ic: '💵' },
     { id: 'bodega', l: 'Bodega', ic: '🏪' },
     { id: 'familias', l: 'Familias', ic: '👥' },
+    { id: 'proveedores', l: 'Proveedores', ic: '🚜' },
     { id: 'productos', l: 'Productos', ic: '🏷️' },
     { id: 'saldos', l: 'Saldos', ic: '💳' },
     { id: 'periodo', l: 'Período', ic: '📅' },
@@ -908,7 +914,8 @@ function AdminApp({ user, families, setFamilies, products, setProducts, sealed, 
         {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
         {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
         {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
-        {tab === 'productos' && <AdminProductos products={products} setProducts={setProducts} />}
+        {tab === 'proveedores' && <AdminProveedores providers={providers} setProviders={setProviders} products={products} setProducts={setProducts} />}
+        {tab === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}
         {tab === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
         {tab === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} currentAdmin={user} />}
         {tab === 'actividad' && <AdminLogs />}

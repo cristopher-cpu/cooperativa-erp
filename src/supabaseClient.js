@@ -309,3 +309,52 @@ export async function updateInventory(productId, quantity) {
     return data;
   }
 }
+
+// ─── PROVEEDORES ──────────────────────────────────────────────────────────────
+// Los proveedores dejaron de ser texto libre dentro de cada producto y pasaron a
+// ser una entidad propia (Fase 2, etapa 1). products.provider_id apunta acá.
+// products.provider (texto) se mantiene sincronizado para no romper la búsqueda
+// del catálogo ni los items ya guardados en sealed_orders.
+
+export async function getProviders() {
+  const { data, error } = await supabase.from('providers').select('*').order('name');
+  if (error) { console.error('getProviders error:', error.message); return []; }
+  return data || [];
+}
+
+export async function addProvider(provider) {
+  const { data, error } = await supabase.from('providers').insert([provider]).select().single();
+  if (error) { console.error('addProvider error:', error.message); return { error: error.message }; }
+  return data;
+}
+
+export async function updateProvider(id, updates) {
+  const { data, error } = await supabase.from('providers').update(updates).eq('id', id).select().single();
+  if (error) { console.error('updateProvider error:', error.message); return { error: error.message }; }
+  return data;
+}
+
+export async function deleteProvider(id) {
+  const { error } = await supabase.from('providers').delete().eq('id', id);
+  if (error) { console.error('deleteProvider error:', error.message); return { error: error.message }; }
+  return true;
+}
+
+// Renombrar un proveedor obliga a reescribir el texto denormalizado en products,
+// o el catálogo mostraría el nombre viejo hasta el próximo despliegue.
+export async function syncProviderNameOnProducts(providerId, newName) {
+  const { error } = await supabase.from('products').update({ provider: newName }).eq('provider_id', providerId);
+  if (error) console.error('syncProviderNameOnProducts error:', error.message);
+  return !error;
+}
+
+export async function updateFamilyContacts(familyId, email, email2) {
+  const { data, error } = await supabase
+    .from('families')
+    .update({ email: email || null, email2: email2 || null })
+    .eq('id', familyId)
+    .select()
+    .single();
+  if (error) { console.error('updateFamilyContacts error:', error.message); return { error: error.message }; }
+  return data;
+}

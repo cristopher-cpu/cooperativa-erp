@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -595,17 +595,21 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
 
 export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, currentAdmin }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', balance: '0', role: 'familia' });
+  const [form, setForm] = useState({ name: '', email: '', email2: '', balance: '0', role: 'familia' });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [srch, setSrch] = useState('');
   const [pinEditId, setPinEditId] = useState(null);
   const [pinVal, setPinVal] = useState('');
   const [pinSaving, setPinSaving] = useState(false);
+  const [mailEditId, setMailEditId] = useState(null);
+  const [mailVals, setMailVals] = useState({ email: '', email2: '' });
+  const [mailSaving, setMailSaving] = useState(false);
 
   const handleAdd = async () => {
     if (!form.name.trim()) { setErr('El nombre es obligatorio'); return; }
-    if (!form.email.includes('@')) { setErr('Email inválido'); return; }
+    if (!form.email.includes('@')) { setErr('El correo principal no es válido'); return; }
+    if (form.email2.trim() && !form.email2.includes('@')) { setErr('El segundo correo no es válido'); return; }
     setLoading(true);
     const newFamily = {
       id: Date.now().toString(),
@@ -613,7 +617,8 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
       initials: form.name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase(),
       balance: parseInt(form.balance) || 0,
       role: form.role,
-      email: form.email.trim()
+      email: form.email.trim(),
+      email2: form.email2.trim() || null
     };
     const result = await addFamily(newFamily);
     if (result) {
@@ -627,13 +632,25 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
           details: `${form.role === 'admin' ? 'Nuevo administrador' : 'Nueva familia'}: ${form.name.trim()}`
         });
       }
-      setForm({ name: '', email: '', balance: '0', role: 'familia' });
+      setForm({ name: '', email: '', email2: '', balance: '0', role: 'familia' });
       setErr('');
       setShowForm(false);
     } else {
       setErr('Error al agregar familia');
     }
     setLoading(false);
+  };
+
+  const saveMailsFor = async (fid) => {
+    const e1 = mailVals.email.trim(), e2 = mailVals.email2.trim();
+    if (e1 && !e1.includes('@')) { alert('El correo principal no es válido'); return; }
+    if (e2 && !e2.includes('@')) { alert('El segundo correo no es válido'); return; }
+    setMailSaving(true);
+    const result = await updateFamilyContacts(fid, e1, e2);
+    if (result && result.error) { alert('Error al guardar: ' + result.error); setMailSaving(false); return; }
+    setFamilies(p => p.map(f => f.id === fid ? { ...f, email: e1 || null, email2: e2 || null } : f));
+    setMailEditId(null);
+    setMailSaving(false);
   };
 
   const savePinFor = async (fid) => {
@@ -687,6 +704,43 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
   const fams = families.filter(f => f.role === 'familia');
   const filtered = fams.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
 
+  // Los correos no son credenciales de acceso (se entra con nombre + PIN);
+  // son las direcciones de notificación de la familia. La cooperativa pidió dos.
+  const renderContactRow = (f) => (
+    <div style={{ padding: '0.5rem 1rem', background: '#fbfdfb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: '10px', color: '#aaa' }}>✉</span>
+      {mailEditId === f.id ? (
+        <>
+          <input type="email" placeholder="Correo principal" value={mailVals.email}
+            onChange={e => setMailVals(v => ({ ...v, email: e.target.value }))}
+            style={{ flex: 1, minWidth: '150px', padding: '4px 8px', border: '1px solid #4CAF50', borderRadius: '5px', fontSize: '12px' }} />
+          <input type="email" placeholder="Segundo correo (opcional)" value={mailVals.email2}
+            onChange={e => setMailVals(v => ({ ...v, email2: e.target.value }))}
+            style={{ flex: 1, minWidth: '150px', padding: '4px 8px', border: '1px solid #dde8dd', borderRadius: '5px', fontSize: '12px' }} />
+          <button onClick={() => saveMailsFor(f.id)} disabled={mailSaving}
+            style={{ padding: '3px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
+            {mailSaving ? '...' : '✓'}
+          </button>
+          <button onClick={() => setMailEditId(null)}
+            style={{ padding: '3px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+        </>
+      ) : (
+        <>
+          <span style={{ fontSize: '11px', color: '#666' }}>
+            {f.email || <span style={{ color: '#c62828' }}>sin correo</span>}
+            {f.email2
+              ? <span style={{ color: '#888' }}> · {f.email2}</span>
+              : <span style={{ color: '#ccc' }}> · sin segundo correo</span>}
+          </span>
+          <button onClick={() => { setMailEditId(f.id); setMailVals({ email: f.email || '', email2: f.email2 || '' }); }}
+            style={{ marginLeft: 'auto', padding: '2px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#555' }}>
+            Editar correos
+          </button>
+        </>
+      )}
+    </div>
+  );
+
   const renderPinRow = (f) => (
     <div style={{ padding: '0.5rem 1rem', background: '#f9fafb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
       <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>
@@ -736,7 +790,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
         <div style={{ padding: '1rem', background: 'white', border: '1px solid #c8e6c9', borderRadius: '8px', marginBottom: '1rem' }}>
           <p style={{ fontWeight: 600, fontSize: '14px', color: '#2e7d32', margin: '0 0 1rem' }}>Nuevo miembro</p>
           <div style={{ display: 'grid', gap: '10px', marginBottom: '1rem' }}>
-            {[{ k: 'name', l: 'Nombre completo *', t: 'text', ph: 'Ej: Familia González' }, { k: 'email', l: 'Correo electrónico *', t: 'email', ph: 'correo@ejemplo.com' }, { k: 'balance', l: 'Saldo inicial', t: 'number', ph: '0' }].map(f => (
+            {[{ k: 'name', l: 'Nombre completo *', t: 'text', ph: 'Ej: Familia González' }, { k: 'email', l: 'Correo electrónico *', t: 'email', ph: 'correo@ejemplo.com' }, { k: 'email2', l: 'Segundo correo (opcional)', t: 'email', ph: 'otro@ejemplo.com' }, { k: 'balance', l: 'Saldo inicial', t: 'number', ph: '0' }].map(f => (
               <div key={f.k}>
                 <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>{f.l}</label>
                 <input type={f.t} placeholder={f.ph} value={form[f.k]} onChange={e => setForm(p => ({ ...p, [f.k]: e.target.value }))}
@@ -773,7 +827,6 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                   <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#1565c0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
                   <div style={{ minWidth: 0 }}>
                     <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
-                    <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -785,6 +838,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                   </button>
                 </div>
               </div>
+              {renderContactRow(f)}
               {renderPinRow(f)}
             </div>
           ))}
@@ -799,7 +853,6 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
               <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#4CAF50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
               <div style={{ minWidth: 0 }}>
                 <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
-                <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{f.email}</p>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -820,6 +873,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
               </button>
             </div>
           </div>
+          {renderContactRow(f)}
           {renderPinRow(f)}
         </div>
       ))}
@@ -829,33 +883,49 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
 
 // ─── PRODUCTOS ────────────────────────────────────────────────────────────────
 
-export function AdminProductos({ products, setProducts }) {
+export function AdminProductos({ products, setProducts, providers = [] }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ name: '', category: 'Cereales', price: '', unit: '', provider: '', in_stock: true });
+  const [form, setForm] = useState({ name: '', category: 'Cereales', price: '', unit: '', provider_id: '', in_stock: true });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [srch, setSrch] = useState('');
 
   const CATS = ['Cereales', 'Legumbres', 'Semillas', 'Harinas', 'Té y Café', 'Aceites', 'Aseo', 'Dulces', 'Pan', 'Miel', 'Aliños'];
 
+  // El proveedor se elige de la lista maestra, pero seguimos guardando su nombre
+  // en products.provider: el catálogo y la búsqueda de las familias leen ese texto.
+  const providerFields = () => {
+    const pv = providers.find(p => p.id === form.provider_id);
+    return pv ? { provider_id: pv.id, provider: pv.name } : null;
+  };
+
+  const validate = () => {
+    if (!form.name.trim() || !form.price || !form.unit) return 'Nombre, precio y unidad son obligatorios';
+    if (!form.provider_id) return 'Selecciona un proveedor';
+    if (!providerFields()) return 'El proveedor seleccionado ya no existe';
+    return '';
+  };
+
   const handleSaveNew = async () => {
-    if (!form.name.trim() || !form.price || !form.unit || !form.provider) { setErr('Todos los campos son obligatorios'); return; }
+    const v = validate();
+    if (v) { setErr(v); return; }
     setLoading(true);
-    const newProduct = { id: Math.max(...products.map(p => p.id), 0) + 1, name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), provider: form.provider.trim(), in_stock: form.in_stock };
+    const newProduct = { id: Math.max(...products.map(p => p.id), 0) + 1, name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), in_stock: form.in_stock, ...providerFields() };
     const result = await addProduct(newProduct);
     if (result) {
       setProducts(p => [...p, newProduct]);
-      setForm({ name: '', category: 'Cereales', price: '', unit: '', provider: '', in_stock: true });
+      setForm({ name: '', category: 'Cereales', price: '', unit: '', provider_id: '', in_stock: true });
       setErr(''); setShowForm(false);
     } else { setErr('Error al agregar producto'); }
     setLoading(false);
   };
 
   const handleEdit = async () => {
-    if (!form.name.trim() || !form.price || !form.unit || !form.provider) { setErr('Todos los campos son obligatorios'); return; }
+    const v = validate();
+    if (v) { setErr(v); return; }
     setLoading(true);
-    const updates = { name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), provider: form.provider.trim(), in_stock: form.in_stock };
+    const updates = { name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), in_stock: form.in_stock, ...providerFields() };
     const result = await updateProduct(editId, updates);
     if (result) {
       setProducts(p => p.map(x => x.id === editId ? { ...x, ...updates } : x));
@@ -872,8 +942,12 @@ export function AdminProductos({ products, setProducts }) {
 
   const startEdit = (pr) => {
     setEditId(pr.id);
-    setForm({ name: pr.name, category: pr.category, price: pr.price, unit: pr.unit, provider: pr.provider, in_stock: pr.in_stock });
+    // Productos anteriores a la tabla de proveedores pueden no tener provider_id:
+    // se resuelve por nombre para que el desplegable no aparezca vacío.
+    const byName = providers.find(p => p.name.toLowerCase() === (pr.provider || '').trim().toLowerCase());
+    setForm({ name: pr.name, category: pr.category, price: pr.price, unit: pr.unit, provider_id: pr.provider_id || (byName ? byName.id : ''), in_stock: pr.in_stock });
     setShowForm(false);
+    setErr('');
   };
 
   const vis = products.filter(p => !srch || p.name.toLowerCase().includes(srch.toLowerCase()));
@@ -901,7 +975,16 @@ export function AdminProductos({ products, setProducts }) {
             </div>
             <div>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Proveedor *</label>
-              <input type="text" value={form.provider} onChange={e => setForm(p => ({ ...p, provider: e.target.value }))} style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', boxSizing: 'border-box' }} />
+              <select value={form.provider_id} onChange={e => { setForm(p => ({ ...p, provider_id: e.target.value })); setErr(''); }}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }}>
+                <option value="">— Selecciona —</option>
+                {providers.filter(p => p.active || p.id === form.provider_id).map(p => (
+                  <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inactivo)'}</option>
+                ))}
+              </select>
+              {providers.length === 0 && (
+                <p style={{ fontSize: '10px', color: '#c62828', margin: '3px 0 0' }}>No hay proveedores cargados. Créalos en la pestaña Proveedores.</p>
+              )}
             </div>
             <div>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Precio CLP *</label>
