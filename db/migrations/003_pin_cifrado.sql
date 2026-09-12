@@ -22,11 +22,13 @@ alter table families add column if not exists pin_hash text;
 alter table families add column if not exists pin_set_at    timestamptz;
 alter table families add column if not exists last_login_at timestamptz;
 
--- Si hubiera PIN en texto plano, queda a la vista para migrarlo a mano desde el
--- panel. No se migra automáticamente: hashear requiere el servidor, no SQL.
-select
-  count(*) filter (where pin is not null)      as con_pin_texto_plano,
-  count(*) filter (where pin_hash is not null) as con_pin_cifrado,
-  count(*) filter (where role = 'admin')       as administradores,
-  count(*)                                     as total_familias
-from families;
+-- ─── PIN inicial para los administradores ───────────────────────────────────
+-- Hash scrypt de "7777" calculado fuera de la base: hashear requiere el
+-- servidor, no SQL. Cada uno con su propia sal, por eso son distintos.
+
+update families set pin_hash = 'scrypt$16384$8$1$e30c1dd9c8278cdb3643d5ec2ad0da6f$551aabd14046990e3cf4058b6fb140724bfce63168e8865536189a7d52e6e306', pin = null, pin_set_at = now() where id = 'fabian';  -- Fabián González
+update families set pin_hash = 'scrypt$16384$8$1$de5093117680ebdfdc94c5ee38887b84$587223cc1f11012238da6d82c4f4e4efde58ae04102502adc522472cf92d3a85', pin = null, pin_set_at = now() where id = 'ruby';  -- Ruby Parraguez
+
+-- Verificación: los dos administradores deben aparecer con PIN configurado.
+select id, name, role, (pin_hash is not null) as tiene_pin, pin as texto_plano
+  from families where role = 'admin' order by name;
