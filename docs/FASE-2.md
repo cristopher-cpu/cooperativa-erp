@@ -223,6 +223,13 @@ rompería la garantía de que un proveedor no ve datos de otros.
       suyo. Funciona para pruebas, pero hacia proveedores con casillas corporativas
       una parte va a caer en spam. La solución cuesta ~$10.000–15.000 CLP/año, así que
       **es decisión de la cooperativa**, no técnica.
+- [ ] **PIN 7777 es provisional.** Los dos administradores (Fabián González y
+      Ruby Parraguez) comparten el PIN `7777`, puesto para poder probar. El panel
+      NO lo aceptaría como PIN nuevo —rechaza dígitos repetidos— porque se escribió
+      el hash directo a la base. **Cambiarlo antes del Go Live.**
+- [ ] **Ejecutar `db/migrations/003_pin_cifrado.sql`.** Mientras no corra, la
+      exigencia de PIN está desactivada y cualquiera entra como administrador.
+      /api/login lo detecta solo y se degrada en vez de dejar a todos fuera.
 - [ ] **Apagar el modo prueba** (borrar `CORREO_PRUEBAS` en Vercel) cuando se quiera
       enviar de verdad.
 
