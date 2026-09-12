@@ -6,12 +6,22 @@
 
 const { CORREO_PRUEBAS, REMITENTE } = require('./_lib/correo');
 
+// Este endpoint es público: no exponemos direcciones completas para no
+// regalárselas a un recolector de correos que pase por aquí.
+function enmascarar(correo) {
+  if (!correo) return null;
+  const [u, dom] = String(correo).split('@');
+  if (!dom) return '***';
+  const visible = u.slice(0, 2);
+  return visible + '*'.repeat(Math.max(3, u.length - 2)) + '@' + dom;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.status(200).json({
     modoPrueba: !!CORREO_PRUEBAS,
-    destinoPruebas: CORREO_PRUEBAS || null,
-    remitente: REMITENTE.email,
+    destinoPruebas: enmascarar(CORREO_PRUEBAS),
+    remitente: enmascarar(REMITENTE.email),
     remitenteNombre: REMITENTE.name,
     brevoConfigurado: !!process.env.BREVO_API_KEY,
   });

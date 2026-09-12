@@ -111,12 +111,10 @@ export function AdminConsolidado({ families, sealed, products, providers, period
     setSendingId(pv.id);
     setMsg(null);
 
-    const res = await sendPurchaseOrder({
-      periodId: period.id,
-      periodLabel: period.label,
-      providerId: pv.id,
-      lines: g.lines.map(l => ({ product_id: l.product_id, name: l.name, unit: l.unit, qty: l.qty, price: l.price })),
-    });
+    // Solo se mandan los dos identificadores: el servidor reconstruye el
+    // consolidado leyendo los pedidos sellados. Lo que se ve en esta pantalla es
+    // una previsualización; la orden que sale la arma la base, no el navegador.
+    const res = await sendPurchaseOrder({ periodId: period.id, providerId: pv.id });
 
     if (res.error) {
       setMsg({ tipo: 'err', texto: res.error });

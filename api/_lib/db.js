@@ -54,3 +54,17 @@ module.exports = {
   getProvider: (id) =>
     sb('/providers?select=*&id=eq.' + enc(id) + '&limit=1').then(r => (r && r[0]) || null),
 };
+
+// Lecturas para reconstruir el consolidado en el servidor. El navegador solo dice
+// "período X, proveedor Y": el contenido de la orden se deriva acá, de la base.
+module.exports.getSealedOrdersForPeriod = (periodId) =>
+  sb('/sealed_orders?select=*&period_id=eq.' + enc(periodId) + '&order=sealed_at.asc');
+
+module.exports.getProductsOfProvider = (providerId) =>
+  sb('/products?select=id,name,unit,price,provider_id&provider_id=eq.' + enc(providerId));
+
+module.exports.getPeriod = (periodId) =>
+  sb('/periods?select=*&id=eq.' + enc(periodId) + '&limit=1').then(r => (r && r[0]) || null);
+
+module.exports.getOrdersForProviderPeriod = (periodId, providerId) =>
+  sb('/purchase_orders?select=*&period_id=eq.' + enc(periodId) + '&provider_id=eq.' + enc(providerId));

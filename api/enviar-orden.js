@@ -3,10 +3,19 @@
 // Crea la orden de compra de un proveedor y se la envía por correo.
 // El navegador nunca ve la clave de Brevo: solo llama a este endpoint.
 //
-// Body: { periodId, periodLabel, providerId, lines: [{product_id,name,unit,qty,price,subtotal}] }
+// Body: { periodId, providerId }
+//
+// El navegador NO manda el contenido de la orden. Antes sí lo hacía, y eso
+// significaba que cualquiera podía pedirle a esta función que le mandara a un
+// proveedor real un pedido con productos, cantidades y precios inventados. Ahora
+// el consolidado se reconstruye acá, leyendo los pedidos sellados: lo peor que
+// puede lograr una llamada no autorizada es reenviar una orden que ya era cierta.
 
 const crypto = require('crypto');
-const { getProvider, insertOrder, updateOrder } = require('./_lib/db');
+const {
+  getProvider, insertOrder, updateOrder,
+  getSealedOrdersForPeriod, getProductsOfProvider, getPeriod,
+} = require('./_lib/db');
 const { enviarOrden } = require('./_lib/correo');
 
 function baseUrl(req) {
@@ -14,6 +23,52 @@ function baseUrl(req) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const proto = req.headers['x-forwarded-proto'] || (host && host.startsWith('localhost') ? 'http' : 'https');
   return proto + '://' + host;
+}
+
+function parseItems(ord) {
+  try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
+}
+
+// Agrupa los pedidos sellados del período y se queda con los productos de este
+// proveedor. Es la misma lógica que muestra la pestaña Consolidado, pero acá es
+// la que manda: si difieren, la verdad es esta.
+function construirLineas(sealedOrders, productosDelProveedor) {
+  const porProducto = new Map();
+  const indice = new Map(productosDelProveedor.map(p => [p.id, p]));
+
+  // Un mismo family_id puede tener más de una fila si algo salió mal al sellar.
+  // Nos quedamos con la más reciente para no contar dos veces el mismo pedido.
+  const ultimaPorFamilia = new Map();
+  sealedOrders.forEach(o => { ultimaPorFamilia.set(o.family_id, o); });
+
+  ultimaPorFamilia.forEach(ord => {
+    parseItems(ord).forEach(item => {
+      if (!item || !(Number(item.qty) > 0)) return;
+      const prod = indice.get(item.id);
+      if (!prod) return; // de otro proveedor, o ya no existe en el maestro
+
+      if (!porProducto.has(prod.id)) {
+        porProducto.set(prod.id, {
+          product_id: prod.id,
+          name: prod.name,
+          unit: prod.unit || '',
+          price: Number(prod.price) || 0,
+          qty: 0,
+          subtotal: 0,
+          available: null,
+          confirmed_qty: null,
+          note: null,
+        });
+      }
+      const l = porProducto.get(prod.id);
+      l.qty += Number(item.qty);
+      l.subtotal = Math.round(l.qty * l.price);
+    });
+  });
+
+  return Array.from(porProducto.values())
+    .filter(l => l.qty > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 module.exports = async (req, res) => {
@@ -24,47 +79,37 @@ module.exports = async (req, res) => {
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const { periodId, periodLabel, providerId, lines } = body;
+    const { periodId, providerId } = body;
 
     if (!periodId) return res.status(400).json({ error: 'Falta el período' });
     if (!providerId) return res.status(400).json({ error: 'Falta el proveedor' });
-    if (!Array.isArray(lines) || lines.length === 0) {
-      return res.status(400).json({ error: 'La orden no tiene productos' });
+
+    const [provider, periodo, sealedOrders, productos] = await Promise.all([
+      getProvider(providerId),
+      getPeriod(periodId),
+      getSealedOrdersForPeriod(periodId),
+      getProductsOfProvider(providerId),
+    ]);
+
+    if (!provider) return res.status(404).json({ error: 'El proveedor ya no existe' });
+    if (!periodo) return res.status(404).json({ error: 'El período no existe' });
+
+    const lineas = construirLineas(sealedOrders || [], productos || []);
+    if (lineas.length === 0) {
+      return res.status(400).json({ error: 'No hay nada que pedirle a ' + provider.name + ' en este período.' });
     }
 
-    const provider = await getProvider(providerId);
-    if (!provider) return res.status(404).json({ error: 'El proveedor ya no existe' });
-
-    // Se recalcula en el servidor: no confiamos en los totales que manda el navegador.
-    const limpias = lines.map(l => {
-      const qty = Number(l.qty) || 0;
-      const price = Number(l.price) || 0;
-      return {
-        product_id: l.product_id,
-        name: String(l.name || ''),
-        unit: String(l.unit || ''),
-        qty,
-        price,
-        subtotal: Math.round(qty * price),
-        available: null,      // lo llena el proveedor al confirmar
-        confirmed_qty: null,
-        note: null,
-      };
-    }).filter(l => l.qty > 0);
-
-    if (limpias.length === 0) return res.status(400).json({ error: 'Todas las cantidades son cero' });
-
-    const total = limpias.reduce((s, l) => s + l.subtotal, 0);
+    const total = lineas.reduce((s, l) => s + l.subtotal, 0);
     const token = crypto.randomBytes(24).toString('base64url');
 
     const orden = await insertOrder({
       period_id: String(periodId),
-      period_label: periodLabel || null,
+      period_label: periodo.label || null,
       provider_id: provider.id,
       provider_name: provider.name,
       token,
       status: 'enviada',
-      lines: limpias,
+      lines: lineas,
       total,
     });
 
@@ -76,8 +121,8 @@ module.exports = async (req, res) => {
       providerName: provider.name,
       providerEmail: provider.email,
       isMember: !!provider.is_member,
-      periodLabel,
-      lines: limpias,
+      periodLabel: periodo.label,
+      lines: lineas,
       total,
       linkConfirmar: link,
     });
@@ -96,6 +141,7 @@ module.exports = async (req, res) => {
       ok: true,
       orderId: orden.id,
       total,
+      lineas: lineas.length,
       enviadoA: envio.destinatario,
       esPrueba: !!envio.esPrueba,
       link,
