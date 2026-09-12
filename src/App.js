@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  getFamilies, getProducts, getSealedOrders, getPeriod, getProviders,
+  getFamilies, getProducts, getSealedOrders, getPeriod, getProviders, loginFamily,
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
   getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
 } from './supabaseClient';
@@ -181,11 +181,21 @@ function Welcome({ families, onLogin, period }) {
   const admins = families.filter(f => f.role === 'admin');
   const fams = families.filter(f => f.role === 'familia');
 
+  const [verificando, setVerificando] = useState(false);
+
   const selectFam = (f) => { setLoginFam(f); setPin(''); setPinErr(''); };
 
-  const tryLogin = () => {
-    if (loginFam?.pin && pin !== loginFam.pin) { setPinErr('PIN incorrecto'); return; }
-    onLogin(loginFam);
+  // El PIN se verifica en el servidor. Antes se comparaba aquí, contra un PIN en
+  // texto plano que la base mandaba al navegador de cualquiera.
+  const tryLogin = async () => {
+    if (!loginFam || verificando) return;
+    setVerificando(true);
+    setPinErr('');
+    const res = await loginFamily(loginFam.id, pin);
+    setVerificando(false);
+    if (res.error) { setPinErr(res.error); return; }
+    // Se entra con lo que devuelve el servidor, no con la fila que ya teníamos.
+    onLogin(res.family || loginFam);
   };
 
   if (loginFam) {
@@ -200,35 +210,42 @@ function Welcome({ families, onLogin, period }) {
             {isAdmin && <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: '#1565c0', color: 'white' }}>ADMINISTRADOR</span>}
           </div>
 
-          {loginFam.pin ? (
+          {loginFam.pin_set_at ? (
             <div>
               <p style={{ fontSize: '13px', color: '#666', textAlign: 'center', margin: '0 0 1rem' }}>Ingresa tu PIN de acceso</p>
               <input
                 type="password"
                 inputMode="numeric"
-                maxLength={6}
+                maxLength={8}
                 value={pin}
-                onChange={e => { setPin(e.target.value); setPinErr(''); }}
+                onChange={e => { setPin(e.target.value.replace(/[^0-9]/g, '')); setPinErr(''); }}
                 onKeyDown={e => e.key === 'Enter' && tryLogin()}
                 autoFocus
                 placeholder="• • • •"
                 style={{ width: '100%', padding: '12px', textAlign: 'center', fontSize: '26px', border: `2px solid ${pinErr ? '#ef9a9a' : '#dde8dd'}`, borderRadius: '10px', letterSpacing: '6px', boxSizing: 'border-box', outline: 'none', marginBottom: '8px' }}
               />
               {pinErr && <p style={{ fontSize: '12px', color: '#c62828', textAlign: 'center', margin: '0 0 10px', fontWeight: 500 }}>{pinErr}</p>}
-              <button onClick={tryLogin}
-                style={{ width: '100%', padding: '11px', background: color, color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '15px', marginBottom: '10px' }}>
-                Entrar
+              <button onClick={tryLogin} disabled={verificando}
+                style={{ width: '100%', padding: '11px', background: color, color: 'white', border: 'none', borderRadius: '8px', cursor: verificando ? 'wait' : 'pointer', fontWeight: 700, fontSize: '15px', marginBottom: '10px', opacity: verificando ? 0.7 : 1 }}>
+                {verificando ? 'Verificando...' : 'Entrar'}
               </button>
             </div>
           ) : (
             <div>
-              <div style={{ padding: '10px', background: '#f5f5f5', borderRadius: '8px', marginBottom: '1rem', textAlign: 'center' }}>
-                <p style={{ fontSize: '12px', color: '#aaa', margin: 0 }}>Sin PIN configurado — acceso directo</p>
+              <div style={{ padding: '10px', background: isAdmin ? '#ffebee' : '#f5f5f5', borderRadius: '8px', marginBottom: '1rem', textAlign: 'center' }}>
+                <p style={{ fontSize: '12px', color: isAdmin ? '#c62828' : '#aaa', margin: 0, fontWeight: isAdmin ? 600 : 400 }}>
+                  {isAdmin
+                    ? 'Esta cuenta de administrador no tiene PIN. Por seguridad no puede entrar hasta que se le asigne uno.'
+                    : 'Sin PIN configurado — acceso directo'}
+                </p>
               </div>
-              <button onClick={() => onLogin(loginFam)}
-                style={{ width: '100%', padding: '11px', background: color, color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '15px', marginBottom: '10px' }}>
-                Entrar
+              {/* Aunque no haya PIN se pasa por el servidor: es él quien decide si
+                  se puede entrar, no el navegador. */}
+              <button onClick={tryLogin} disabled={verificando}
+                style={{ width: '100%', padding: '11px', background: color, color: 'white', border: 'none', borderRadius: '8px', cursor: verificando ? 'wait' : 'pointer', fontWeight: 700, fontSize: '15px', marginBottom: '10px', opacity: verificando ? 0.7 : 1 }}>
+                {verificando ? 'Verificando...' : 'Entrar'}
               </button>
+              {pinErr && <p style={{ fontSize: '12px', color: '#c62828', textAlign: 'center', margin: '0 0 10px', fontWeight: 500 }}>{pinErr}</p>}
             </div>
           )}
 
@@ -258,7 +275,7 @@ function Welcome({ families, onLogin, period }) {
             <div>
               <strong style={{ fontSize: '15px', color: '#1565c0', display: 'block' }}>{f.name}</strong>
               <span style={{ fontSize: '10px', color: '#1976d2', fontWeight: 600 }}>ADMINISTRADOR</span>
-              {f.pin && <span style={{ marginLeft: '6px', fontSize: '9px', color: '#aaa' }}>🔒</span>}
+              {f.pin_set_at && <span style={{ marginLeft: "6px", fontSize: "9px", color: "#aaa" }}>🔒</span>}
             </div>
           </button>
         ))}
@@ -272,7 +289,7 @@ function Welcome({ families, onLogin, period }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
               <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#4CAF50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>{f.initials}</div>
               <strong style={{ fontSize: '14px', flex: 1 }}>{f.name}</strong>
-              {f.pin && <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>}
+              {f.pin_set_at && <span style={{ fontSize: "10px", color: "#aaa" }}>🔒</span>}
             </div>
             {f.balance !== 0 && (
               <p style={{ fontSize: '11px', color: f.balance > 0 ? '#2e7d32' : '#c62828', margin: 0, fontWeight: 500 }}>

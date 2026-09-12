@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, updateFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts } from './supabaseClient';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -602,6 +602,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
   const [pinEditId, setPinEditId] = useState(null);
   const [pinVal, setPinVal] = useState('');
   const [pinSaving, setPinSaving] = useState(false);
+  const [pinErr, setPinErr] = useState('');
   const [mailEditId, setMailEditId] = useState(null);
   const [mailVals, setMailVals] = useState({ email: '', email2: '' });
   const [mailSaving, setMailSaving] = useState(false);
@@ -653,18 +654,22 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
     setMailSaving(false);
   };
 
+  // El PIN se cifra en el servidor: el panel no escribe la columna directamente.
   const savePinFor = async (fid) => {
     setPinSaving(true);
-    await updateFamilyPin(fid, pinVal.trim() || null);
-    setFamilies(p => p.map(f => f.id === fid ? { ...f, pin: pinVal.trim() || null } : f));
+    setPinErr('');
+    const res = await setFamilyPin(fid, pinVal.trim());
+    if (res.error) { setPinErr(res.error); setPinSaving(false); return; }
+    setFamilies(p => p.map(f => f.id === fid ? { ...f, pin_set_at: new Date().toISOString() } : f));
     setPinEditId(null);
     setPinVal('');
     setPinSaving(false);
   };
 
   const clearPinFor = async (fid) => {
-    await updateFamilyPin(fid, null);
-    setFamilies(p => p.map(f => f.id === fid ? { ...f, pin: null } : f));
+    const res = await setFamilyPin(fid, null);
+    if (res.error) { alert(res.error); return; }
+    setFamilies(p => p.map(f => f.id === fid ? { ...f, pin_set_at: null } : f));
   };
 
   const [roleSavingId, setRoleSavingId] = useState(null);
@@ -742,30 +747,38 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
   );
 
   const renderPinRow = (f) => (
-    <div style={{ padding: '0.5rem 1rem', background: '#f9fafb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+    <div style={{ padding: '0.5rem 1rem', background: f.role === 'admin' && !f.pin_set_at ? '#fff5f5' : '#f9fafb', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
       <span style={{ fontSize: '10px', color: '#aaa' }}>🔒</span>
       {pinEditId === f.id ? (
         <>
-          <input type="text" inputMode="numeric" maxLength={6} placeholder="Ingresa PIN numérico" value={pinVal}
-            onChange={e => setPinVal(e.target.value.replace(/[^0-9]/g, ''))}
-            style={{ flex: 1, padding: '4px 8px', border: '1px solid #4CAF50', borderRadius: '5px', fontSize: '12px' }} />
+          <input type="password" inputMode="numeric" maxLength={8} placeholder="PIN de 4 a 8 dígitos" value={pinVal}
+            onChange={e => { setPinVal(e.target.value.replace(/[^0-9]/g, '')); setPinErr(''); }}
+            onKeyDown={e => e.key === 'Enter' && savePinFor(f.id)}
+            autoFocus
+            style={{ flex: 1, minWidth: '140px', padding: '4px 8px', border: `1px solid ${pinErr ? '#ef9a9a' : '#4CAF50'}`, borderRadius: '5px', fontSize: '12px', letterSpacing: '3px' }} />
           <button onClick={() => savePinFor(f.id)} disabled={pinSaving}
             style={{ padding: '3px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
             {pinSaving ? '...' : '✓'}
           </button>
-          <button onClick={() => { setPinEditId(null); setPinVal(''); }}
+          <button onClick={() => { setPinEditId(null); setPinVal(''); setPinErr(''); }}
             style={{ padding: '3px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+          {pinErr && <p style={{ fontSize: '10px', color: '#c62828', margin: 0, width: '100%', fontWeight: 500 }}>{pinErr}</p>}
         </>
       ) : (
         <>
-          <span style={{ fontSize: '11px', color: f.pin ? '#2e7d32' : '#aaa', fontWeight: f.pin ? 600 : 400 }}>
-            {f.pin ? `PIN configurado (${f.pin.length} dígitos)` : 'Sin PIN — acceso libre'}
+          <span style={{ fontSize: '11px', color: f.pin_set_at ? '#2e7d32' : f.role === 'admin' ? '#c62828' : '#aaa', fontWeight: f.pin_set_at || f.role === 'admin' ? 600 : 400 }}>
+            {f.pin_set_at
+              ? 'PIN configurado'
+              : f.role === 'admin'
+                ? '⚠ Sin PIN — no podrá entrar hasta que se le asigne uno'
+                : 'Sin PIN — acceso libre'}
           </span>
-          <button onClick={() => { setPinEditId(f.id); setPinVal(f.pin || ''); }}
+          {/* El PIN ya no se puede leer, ni siquiera desde el panel: solo se reemplaza. */}
+          <button onClick={() => { setPinEditId(f.id); setPinVal(''); setPinErr(''); }}
             style={{ marginLeft: 'auto', padding: '2px 8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#555' }}>
-            {f.pin ? 'Cambiar' : 'Asignar PIN'}
+            {f.pin_set_at ? 'Cambiar' : 'Asignar PIN'}
           </button>
-          {f.pin && (
+          {f.pin_set_at && f.role !== 'admin' && (
             <button onClick={() => clearPinFor(f.id)}
               style={{ padding: '2px 8px', background: '#fff5f5', border: '1px solid #ffcdd2', borderRadius: '5px', cursor: 'pointer', fontSize: '10px', color: '#c62828' }}>
               Quitar

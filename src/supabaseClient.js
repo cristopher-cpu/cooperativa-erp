@@ -5,9 +5,61 @@ const SUPABASE_ANON_KEY = "sb_publishable_tElx3P7KYXfYsqzsn2R7_g_lWT0yulK";
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Columnas explícitas, nunca select('*'). Con '*' viajaban `pin` (texto plano) y
+// `pin_hash` al navegador de cualquiera que abriera el sitio. Para saber si una
+// familia tiene PIN basta `pin_set_at`, que no revela nada.
+const FAMILY_COLS = 'id,name,initials,balance,role,email,email2,created_at,pin_set_at,last_login_at';
+
+// Columnas anteriores a la migración 003, por si el despliegue llega antes que
+// ella: sin esto la app se quedaría sin familias y nadie podría entrar.
+const FAMILY_COLS_PRE_003 = 'id,name,initials,balance,role,email,email2,created_at';
+
 export async function getFamilies() {
-  const { data } = await supabase.from('families').select('*');
-  return data || [];
+  const { data, error } = await supabase.from('families').select(FAMILY_COLS);
+  if (!error) return data || [];
+
+  console.warn('getFamilies: faltan columnas de la migración 003, reintentando sin ellas:', error.message);
+  const { data: previo, error: error2 } = await supabase.from('families').select(FAMILY_COLS_PRE_003);
+  if (error2) { console.error('getFamilies error:', error2.message); return []; }
+  return previo || [];
+}
+
+// El PIN se verifica en el servidor. Devuelve { family } o { error }.
+export async function loginFamily(familyId, pin) {
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ familyId, pin: pin || null }),
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* no era JSON */ }
+    if (!res.ok) {
+      return { error: (body && body.error) || 'No se pudo verificar el acceso (' + res.status + ')', necesitaPin: body && body.necesitaPin };
+    }
+    return body || { error: 'Respuesta vacía del servidor' };
+  } catch (e) {
+    return { error: 'No se pudo contactar al servidor: ' + e.message };
+  }
+}
+
+// Cifrar exige el servidor, así que el panel no escribe la columna directamente.
+export async function setFamilyPin(familyId, pin) {
+  try {
+    const res = await fetch('/api/set-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ familyId, pin: pin || null }),
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* no era JSON */ }
+    if (!res.ok) return { error: (body && body.error) || 'No se pudo guardar el PIN (' + res.status + ')' };
+    return body || { error: 'Respuesta vacía del servidor' };
+  } catch (e) {
+    return { error: 'No se pudo contactar al servidor: ' + e.message };
+  }
 }
 
 export async function getProducts() {
