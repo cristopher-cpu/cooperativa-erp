@@ -16,7 +16,7 @@ export async function getProducts() {
 }
 
 export async function getSealedOrders(periodId) {
-  const { data } = await supabase.from('sealed_orders').select('*').eq('period_id', periodId);
+  const { data } = await supabase.from('sealed_orders').select('*').eq('period_id', periodId).order('sealed_at', { ascending: true });
   return data || [];
 }
 

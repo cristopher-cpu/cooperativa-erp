@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod, getProviders,
-  sealOrder, markRetired, updateFamilyBalance,
+  sealOrder, unsealOrder, markRetired, updateFamilyBalance,
   getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
 } from './supabaseClient';
 import './App.css';
@@ -87,6 +87,17 @@ function App() {
     const ord = sealed[fid];
     if (!ord || ord.retired) return;
     const items = typeof ord.items === 'string' ? JSON.parse(ord.items) : ord.items;
+
+    // Hay que BORRAR la fila, no solo sacarla del estado de React. Al volver a
+    // sellar se inserta una fila nueva con otro id, así que sin este borrado cada
+    // "Modificar" dejaba un pedido huérfano en la base. De ahí salieron los tres
+    // pedidos duplicados de la familia `ale` en P109.
+    const ok = await unsealOrder(ord.id);
+    if (!ok) {
+      alert('No se pudo abrir el pedido para modificarlo. Revisa tu conexión e intenta de nuevo.');
+      return;
+    }
+
     const cart = {};
     items.forEach(i => { cart[i.id] = i.qty; });
     setCarts(p => ({ ...p, [fid]: cart }));

@@ -1,7 +1,7 @@
 # Fase 2 — Estado, decisiones y pendientes
 
 Cooperativa de Consumo Responsable **Quilpueblo**.
-Última actualización: 6 de septiembre de 2026.
+Última actualización: 12 de septiembre de 2026.
 
 ---
 
@@ -67,8 +67,13 @@ desvía a esa dirección y llega marcada como prueba. El panel muestra el estado
 *antes* de enviar, para que nadie dispare un correo real creyendo que ensaya.
 
 **Los roles son múltiples por familia**, no por persona: `role` pasa de valor único
-a lista. Perfiles acordados: **Admin**, **Proveedores**, **Recepción-Retiro**,
+a lista. Seis perfiles acordados: **Admin**, **Proveedores**, **Recepción**, **Retiro**,
 **Balance Contable**, **Familia**.
+
+Recepción y Retiro son perfiles **separados** (decidido 12-sep-2026): son dos
+acciones en días distintos —recibir del proveedor, y entregar a las familias— y
+aunque a veces las haga la misma gente, por naturaleza espacio-temporal pueden
+cambiar las personas.
 
 ---
 
@@ -131,7 +136,7 @@ necesita para cruzar con los comprobantes de transferencia.
 
 Del flujo de la cooperativa (paso 07 y 08):
 - **Las familias registran sus propios faltantes y extras**; la Comisión
-  Recepción-Retiro supervisa y corrige. Son dos permisos sobre la misma tabla.
+  Retiro supervisa y corrige. Son dos permisos sobre la misma tabla.
 - Los extras tienen **estado de pago**, no son solo "impagos".
 - Hay una **ventana de gracia** post-retiro ("margen para ajustes finales desde el
   hogar") con fecha límite, después de la cual se congela. Requiere un campo de
@@ -141,7 +146,8 @@ Del flujo de la cooperativa (paso 07 y 08):
 
 ### Etapa 4 — Perfiles múltiples
 
-`role` pasa de texto a lista. Cinco perfiles combinables, rotativos por período.
+`role` pasa de texto a lista. Seis perfiles combinables, rotativos por período:
+Admin, Proveedores, Recepción, Retiro, Balance Contable, Familia.
 
 ### Etapa 5 — Reportes Excel
 
@@ -205,13 +211,13 @@ rompería la garantía de que un proveedor no ve datos de otros.
 
 ## 6. Pendientes operativos (no de código)
 
-- [ ] **12 correos de proveedores.** Solo El Granero tiene uno, y es la dirección de
-      pruebas `cristopher.caroca.g@gmail.com`. Sin correo, el botón de enviar orden
-      queda deshabilitado.
+- [ ] **Correos reales de proveedores: no habrá hasta el Go Live.** Los 13 tienen
+      cargado `cristopher.caroca.g@gmail.com` como provisional, para poder probar el
+      envío de todos. El panel de Proveedores avisa cuando varios comparten correo,
+      justamente para que esto no se pase por alto el día del Go Live.
 - [ ] **¿"Balance Contable" es quinta comisión o parte de Administrativa?** Se decidió
       que es un rol nuevo: hoy la cooperativa no lleva flujo de caja en su planilla.
-- [ ] **¿La Comisión Recepción es gente distinta de la de Retiro?** Por ahora fundidas
-      en un solo perfil "Recepción-Retiro".
+- [x] **Recepción y Retiro son perfiles separados.** Resuelto el 12-sep-2026.
 - [ ] **Dominio propio para el correo.** Brevo advierte (DKIM/DMARC) porque se envía
       desde `@gmail.com`: Brevo no puede firmar en nombre de un dominio que no es
       suyo. Funciona para pruebas, pero hacia proveedores con casillas corporativas

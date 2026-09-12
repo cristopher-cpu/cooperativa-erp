@@ -19,6 +19,18 @@ export function AdminProveedores({ providers, setProviders, products, setProduct
   const countFor = (pid) => products.filter(p => p.provider_id === pid).length;
   const sinCorreo = providers.filter(p => p.active && !p.email);
 
+  // Varios proveedores con el mismo correo solo puede significar que son de relleno.
+  // Sin este aviso es demasiado fácil llegar al Go Live mandándole todas las órdenes
+  // a la misma casilla y creer que salieron.
+  const correosRepetidos = (() => {
+    const g = {};
+    providers.filter(p => p.active && p.email).forEach(p => {
+      const k = p.email.trim().toLowerCase();
+      (g[k] = g[k] || []).push(p.name);
+    });
+    return Object.entries(g).filter(([, names]) => names.length > 1);
+  })();
+
   const startNew = () => { setForm(emptyForm); setEditId(null); setShowForm(true); setErr(''); };
 
   const startEdit = (pv) => {
@@ -170,6 +182,20 @@ export function AdminProveedores({ providers, setProviders, products, setProduct
           </p>
           <p style={{ fontSize: '11px', color: '#666', margin: '4px 0 0' }}>
             No se les podrá enviar la orden de compra hasta que lo completes: {sinCorreo.map(p => p.name).join(', ')}.
+          </p>
+        </div>
+      )}
+
+      {correosRepetidos.length > 0 && (
+        <div style={{ background: '#e3f2fd', border: '2px dashed #64b5f6', borderRadius: '8px', padding: '10px 14px', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '12px', color: '#1565c0', fontWeight: 700, margin: 0 }}>📮 Correos provisionales detectados</p>
+          {correosRepetidos.map(([correo, names]) => (
+            <p key={correo} style={{ fontSize: '11px', color: '#555', margin: '4px 0 0', lineHeight: 1.5 }}>
+              <strong>{names.length} proveedores</strong> comparten <strong>{correo}</strong>: {names.join(', ')}.
+            </p>
+          ))}
+          <p style={{ fontSize: '11px', color: '#666', margin: '6px 0 0', lineHeight: 1.5 }}>
+            Sus órdenes de compra llegarán todas a la misma casilla. Reemplaza estos correos por los reales antes del Go Live.
           </p>
         </div>
       )}
