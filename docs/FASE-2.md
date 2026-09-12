@@ -1,7 +1,7 @@
 # Fase 2 — Estado, decisiones y pendientes
 
 Cooperativa de Consumo Responsable **Quilpueblo**.
-Última actualización: 12 de septiembre de 2026.
+Última actualización: 12 de septiembre de 2026 (QA y revisión de seguridad).
 
 ---
 
@@ -267,3 +267,68 @@ Dos riesgos conocidos y aceptados:
   `(period_id, family_id)` y decidir qué hacer con las tres filas históricas.
 - Aviso de ESLint preexistente en `App.js:300` (`cart` en las dependencias de un
   `useMemo`). Por eso el build usa `CI=false`.
+
+---
+
+## 9. QA y revisión de seguridad (12-sep-2026)
+
+Revisión completa de las 4.919 líneas, verificando cada hallazgo contra la base
+real y no solo leyendo el código.
+
+### Corregido en esta revisión ✅
+
+- **`unsealOrderLocal` no borraba la fila.** "Modificar" la sacaba del estado de
+  React y al re-sellar se insertaba otra con id nuevo, dejando huérfana la
+  anterior. Origen de los 3 pedidos de `ale` en `P109`. `unsealOrder()` existía
+  desde siempre en `supabaseClient.js` y nadie la llamaba. Como `sealed` es un
+  mapa por `family_id`, de varias filas sobrevivía solo la última que devolviera
+  Supabase — y sin `ORDER BY`, cuál era resultaba arbitrario. El consolidado y el
+  cierre de período leen de ahí: se pudo haber comprado según un pedido viejo o
+  cobrado mal. Añadido `ORDER BY sealed_at` como segunda defensa.
+- **`/api/enviar-orden` aceptaba el contenido de la orden desde el navegador.**
+  Cualquiera podía hacer que la cooperativa le mandara a un proveedor real un
+  pedido con productos y precios inventados. Ahora recibe solo `periodId` y
+  `providerId` y reconstruye el consolidado desde la base. Los precios salen del
+  maestro, nunca de la copia congelada dentro del pedido.
+- **`/api/estado` publicaba el correo de pruebas.** Ahora lo enmascara.
+
+### Abierto — 🔴 crítico
+
+1. **El panel admin está abierto a internet.** Ninguna de las 17 familias tiene
+   PIN. Quien abra la URL entra como administrador y puede editar saldos, cerrar
+   períodos y cambiar roles. No requiere conocimiento técnico.
+2. **La base es legible y escribible sin autenticación.** La clave pública va en
+   el bundle y RLS está apagado. Verificado desde fuera de la app: se descargan
+   las 17 familias con correos y saldos con un solo comando; escribir también
+   funciona.
+
+Ambas tienen la misma raíz: no hay autenticación real. El argumento de "todos son
+socios de confianza" aplica a *quién usa* el sistema, no a *quién puede llegar*
+a él, y el sitio está publicado.
+
+**Costo de arreglarlo: $0.** Supabase Auth es gratis hasta 50.000 usuarios activos
+(hay 17), RLS es una función de PostgreSQL ya presente, y los correos de
+autenticación pueden salir por el Brevo ya configurado. Lo que cuesta es tiempo y
+decidir si se conserva el acceso por nombre + PIN (más trabajo: PIN cifrado,
+verificado en servidor, credencial firmada) o se migra a correo + contraseña
+(más directo, pero cambia lo que se va a enseñar en las capacitaciones).
+
+### Abierto — 🟠 alto
+
+3. **El cierre de período cobra antes de cerrar y sin vuelta atrás**
+   (`AdminComponents.js`, `handleClosePeriod`). Si el cierre falla, las familias
+   ya quedaron cobradas y el período sigue abierto: **reintentar cobra dos
+   veces**. El bucle tampoco maneja errores por familia, así que puede dejar a
+   unas cobradas y a otras no, en silencio. Arreglo propuesto: columna
+   `charged_at` en `sealed_orders` para que el cobro sea idempotente y el
+   reintento salte lo ya cobrado.
+
+### Abierto — 🟡 medio
+
+4. **Saldos con lectura-modificación-escritura en 8 lugares.** Todos calculan
+   `(saldo || 0) ± monto` en el navegador y sobrescriben. Dos personas operando a
+   la vez pierden un ajuste sin aviso.
+5. **Las reservas de bodega pueden sobrevender.** El stock disponible se calcula
+   desde el estado local; dos familias reservando a la vez ven ambas stock.
+6. **El resumen del cierre no cuadra con lo cobrado.** `totalValue` incluye el
+   pedido propio del admin; el bucle de cobro solo recorre familias.
