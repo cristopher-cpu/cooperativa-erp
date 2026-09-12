@@ -167,6 +167,32 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
         ))}
       </div>
 
+      {/* El plazo limita a las familias, no a la comisión. Conviene que quien
+          está en el panel sepa si sigue siendo el único que puede corregir. */}
+      {(() => {
+        if (!period.date_adjust_until) {
+          return (
+            <div style={{ background: '#f5f5f5', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '10px 13px', marginBottom: '1rem' }}>
+              <p style={{ fontSize: '11px', color: '#777', margin: 0, lineHeight: 1.5 }}>
+                Sin <strong>límite de ajustes</strong> configurado en el período: las familias pueden registrar faltantes y extras indefinidamente. Ponle fecha en la pestaña Período para poder cerrar el ciclo.
+              </p>
+            </div>
+          );
+        }
+        const limite = new Date(period.date_adjust_until + 'T23:59:59');
+        const cerrada = new Date() > limite;
+        const txt = limite.toLocaleDateString('es-CL', { day: 'numeric', month: 'long' });
+        return (
+          <div style={{ background: cerrada ? '#eceff1' : '#e8f5e9', border: `1px solid ${cerrada ? '#b0bec5' : '#a5d6a7'}`, borderRadius: '8px', padding: '10px 13px', marginBottom: '1rem' }}>
+            <p style={{ fontSize: '11px', color: cerrada ? '#455a64' : '#2e7d32', margin: 0, lineHeight: 1.5 }}>
+              {cerrada
+                ? <>🔒 El plazo de las familias cerró el <strong>{txt}</strong>. Ya no pueden registrar nada por su cuenta — <strong>solo la Comisión Retiro puede corregir desde aquí.</strong></>
+                : <>🕑 Las familias pueden registrar sus faltantes y extras hasta el <strong>{txt}</strong>. Después de esa fecha, solo se podrá desde aquí.</>}
+            </p>
+          </div>
+        );
+      })()}
+
       {msg && (
         <div style={{ background: msg.tipo === 'ok' ? '#e8f5e9' : '#ffebee', border: `1px solid ${msg.tipo === 'ok' ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem', display: 'flex', gap: '9px', alignItems: 'flex-start' }}>
           <span>{msg.tipo === 'ok' ? '✓' : '⚠'}</span>

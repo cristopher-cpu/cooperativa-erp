@@ -195,3 +195,65 @@ export function derivarDeConfirmacion({ orden, sealedOrders, period, productos =
 
   return { automaticos, aRepartir };
 }
+
+// ── Ventana de ajustes de la familia ────────────────────────────────────────
+//
+// Del paso 08 del flujo: hay un "margen para ajustes finales de cada planilla
+// desde el hogar". Mucha gente descubre en la casa que le faltó algo.
+//
+// La ventana es SOLO para las familias. La Comisión Retiro puede corregir
+// siempre: el flujo le asigna supervisar el proceso, y sin esa válvula un olvido
+// de un día se resuelve por WhatsApp y termina descuadrando el saldo.
+//
+// Sin fecha límite configurada no se bloquea nada: una configuración incompleta
+// no debe dejar a nadie sin poder reclamar.
+export function ventanaAjustes(period, ord, ahora = new Date()) {
+  if (!ord) {
+    return { abierta: false, motivo: 'sin_pedido', texto: 'No tienes pedido en este período.' };
+  }
+
+  const entrega = period?.date_delivery ? new Date(period.date_delivery + 'T00:00:00') : null;
+  const limite = period?.date_adjust_until ? new Date(period.date_adjust_until + 'T23:59:59') : null;
+
+  // Antes del retiro no hay nada que reclamar: la caja todavía no se abrió.
+  const yaRetiro = !!ord.retired || (entrega ? ahora >= entrega : false);
+  if (!yaRetiro) {
+    return {
+      abierta: false,
+      motivo: 'antes_entrega',
+      texto: entrega
+        ? 'Podrás registrar faltantes y extras a partir del retiro (' +
+          entrega.toLocaleDateString('es-CL', { day: 'numeric', month: 'long' }) + ').'
+        : 'Podrás registrar faltantes y extras después del retiro.',
+    };
+  }
+
+  if (limite && ahora > limite) {
+    return {
+      abierta: false,
+      motivo: 'cerrada',
+      limite,
+      texto: 'El plazo para registrar faltantes y extras cerró el ' +
+        limite.toLocaleDateString('es-CL', { day: 'numeric', month: 'long' }) +
+        '. Si te falta algo por reclamar, habla con la Comisión Retiro.',
+    };
+  }
+
+  const diasRestantes = limite ? Math.ceil((limite - ahora) / 864e5) : null;
+  return {
+    abierta: true,
+    motivo: 'abierta',
+    limite,
+    diasRestantes,
+    texto: limite
+      ? 'Tienes hasta el ' + limite.toLocaleDateString('es-CL', { day: 'numeric', month: 'long' }) +
+        ' para registrar faltantes o extras.'
+      : 'Puedes registrar faltantes o extras de tu pedido.',
+  };
+}
+
+// Una familia solo puede borrar lo que ella misma registró, y solo mientras la
+// ventana siga abierta. Lo que puso el proveedor o la comisión no se toca.
+export function puedeBorrarAjuste(adj, ventana) {
+  return !!(adj && adj.source === 'familia' && ventana && ventana.abierta);
+}

@@ -10,6 +10,7 @@ import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros
 import { AdminProveedores } from './AdminProveedores';
 import { AdminConsolidado } from './AdminConsolidado';
 import { AdminAjustes } from './AdminAjustes';
+import { FamiliaAjustes } from './FamiliaAjustes';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -756,6 +757,8 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                 ))}
               </div>
             )}
+
+            <FamiliaAjustes user={user} ord={ord} period={period} products={products} ajustes={ajustes} setAjustes={setAjustes} />
 
             {/* RESERVAS DE BODEGA */}
             {myReservations.length > 0 && (
