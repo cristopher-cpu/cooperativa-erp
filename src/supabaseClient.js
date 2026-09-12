@@ -192,7 +192,7 @@ export async function updateProduct(id, updates) {
 export async function updatePeriod(periodId, updates) {
   // Sanitize: DATE columns must receive null, never empty string
   const clean = { ...updates };
-  ['date_from', 'date_to', 'date_delivery'].forEach(k => {
+  ['date_from', 'date_to', 'date_delivery', 'date_adjust_until', 'date_confirm_until'].forEach(k => {
     if (k in clean && clean[k] === '') clean[k] = null;
   });
   const { data, error } = await supabase
@@ -472,4 +472,63 @@ export async function sendPurchaseOrder(payload) {
   } catch (e) {
     return { error: 'No se pudo contactar al servidor: ' + e.message };
   }
+}
+
+// ─── AJUSTES DE PEDIDO (faltantes, extras, no confirmados) ───────────────────
+// Convención de signo: amount = cuánto cambia lo que la familia DEBE.
+//   negativo → debe menos (no llegó)   ·   positivo → debe más (se llevó extra)
+// Total a pagar = pedido.total + cargo + suma(ajustes.amount)
+
+export async function getAdjustments(periodId) {
+  const { data, error } = await supabase
+    .from('order_adjustments')
+    .select('*')
+    .eq('period_id', periodId)
+    .order('created_at', { ascending: false });
+  if (error) { console.error('getAdjustments error:', error.message); return []; }
+  return data || [];
+}
+
+export async function addAdjustment(adj) {
+  const { data, error } = await supabase.from('order_adjustments').insert([adj]).select().single();
+  if (error) { console.error('addAdjustment error:', error.message); return { error: error.message }; }
+  return data;
+}
+
+// Varios de una vez (la confirmación del proveedor genera uno por familia).
+// ignoreDuplicates deja pasar los que ya existían sin romper el resto: reenviar
+// una orden de compra no debe duplicar descuentos.
+export async function addAdjustmentsBulk(adjs) {
+  if (!adjs.length) return [];
+  const { data, error } = await supabase
+    .from('order_adjustments')
+    .upsert(adjs, { onConflict: 'period_id,family_id,product_id', ignoreDuplicates: true })
+    .select();
+  if (error) { console.error('addAdjustmentsBulk error:', error.message); return { error: error.message }; }
+  return data || [];
+}
+
+export async function updateAdjustment(id, updates) {
+  const { data, error } = await supabase.from('order_adjustments').update(updates).eq('id', id).select().single();
+  if (error) { console.error('updateAdjustment error:', error.message); return { error: error.message }; }
+  return data;
+}
+
+export async function deleteAdjustment(id) {
+  const { error } = await supabase.from('order_adjustments').delete().eq('id', id);
+  if (error) { console.error('deleteAdjustment error:', error.message); return { error: error.message }; }
+  return true;
+}
+
+// Marca un pedido como cobrado. El cierre de período lo usa para no cobrar dos
+// veces si falla a la mitad y hay que reintentar.
+export async function markOrderCharged(orderId, amount) {
+  const { data, error } = await supabase
+    .from('sealed_orders')
+    .update({ charged_at: new Date().toISOString(), charged_amount: amount })
+    .eq('id', orderId)
+    .select()
+    .single();
+  if (error) { console.error('markOrderCharged error:', error.message); return { error: error.message }; }
+  return data;
 }

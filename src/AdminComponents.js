@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged } from './supabaseClient';
+import { cuentaDeFamilia, ajustesPorFamilia } from './calculos';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -1080,7 +1081,7 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
 // ─── PERÍODO ──────────────────────────────────────────────────────────────────
 
 export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, currentAdmin }) {
-  const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '' });
+  const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '', date_confirm_until: period?.date_confirm_until || '', date_adjust_until: period?.date_adjust_until || '' });
   const [loading, setLoading] = useState(false);
   const [dateErr, setDateErr] = useState('');
   const [showClose, setShowClose] = useState(false);
@@ -1195,6 +1196,8 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
       date_from: dates.date_from || null,
       date_to: dates.date_to || null,
       date_delivery: dates.date_delivery || null,
+      date_confirm_until: dates.date_confirm_until || null,
+      date_adjust_until: dates.date_adjust_until || null,
     };
     await updatePeriod(period.id, clean);
     setPeriod(p => ({ ...p, ...clean }));
@@ -1224,13 +1227,30 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
       })
     };
 
+    // El cobro va ANTES de cerrar y no se puede deshacer, así que cada pedido se
+    // marca como cobrado en cuanto se aplica. Si esto falla a la mitad y el admin
+    // reintenta, los ya cobrados se saltan en vez de cobrarse dos veces.
+    const ajustes = await getAdjustments(period.id);
+    const porFam = ajustesPorFamilia(ajustes);
+    const fallidas = [];
+
     for (const f of na) {
       const ord = sealed[f.id];
-      if (ord) {
-        const totalDebe = ord.total + cargo;
-        const nuevoSaldo = (f.balance || 0) - totalDebe;
-        await updateFamilyBalance(f.id, nuevoSaldo);
-      }
+      if (!ord) continue;
+      if (ord.charged_at) continue; // ya cobrado en un intento anterior
+
+      const cuenta = cuentaDeFamilia({ ord, ajustes: porFam.get(f.id) || [], cargo, saldo: f.balance || 0 });
+      const nuevoSaldo = (f.balance || 0) - cuenta.cargoAlCerrar;
+
+      const res = await updateFamilyBalance(f.id, nuevoSaldo);
+      if (!res) { fallidas.push(f.name); continue; }
+      await markOrderCharged(ord.id, cuenta.cargoAlCerrar);
+    }
+
+    if (fallidas.length) {
+      setCloseMsg('No se pudo cobrar a: ' + fallidas.join(', ') + '. El período NO se cerró. Vuelve a intentarlo — las familias ya cobradas no se cobrarán de nuevo.');
+      setClosing(false);
+      return;
     }
 
     const newPeriod = {
@@ -1284,7 +1304,7 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
 
         <p style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 1rem', color: '#333' }}>Fechas del período</p>
         <div style={{ display: 'grid', gap: '10px', marginBottom: '1.25rem' }}>
-          {[{ key: 'date_from', l: 'Apertura de pedidos' }, { key: 'date_to', l: 'Cierre de pedidos' }, { key: 'date_delivery', l: 'Fecha de entrega' }].map(f => (
+          {[{ key: 'date_from', l: 'Apertura de pedidos' }, { key: 'date_to', l: 'Cierre de pedidos' }, { key: 'date_confirm_until', l: 'Límite confirmación proveedores' }, { key: 'date_delivery', l: 'Fecha de entrega' }, { key: 'date_adjust_until', l: 'Límite de ajustes (faltantes/extras)' }].map(f => (
             <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <label style={{ fontSize: '12px', color: '#666', minWidth: '170px' }}>{f.l}</label>
               <input type="date" value={dates[f.key]} onChange={e => setDates(p => ({ ...p, [f.key]: e.target.value }))}

@@ -2,12 +2,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod, getProviders, loginFamily,
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
-  getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment
+  getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, getAdjustments
 } from './supabaseClient';
+import { TIPOS, clp, cuentaDeFamilia } from './calculos';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
 import { AdminProveedores } from './AdminProveedores';
 import { AdminConsolidado } from './AdminConsolidado';
+import { AdminAjustes } from './AdminAjustes';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -317,13 +319,18 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   const [reserveErr, setReserveErr] = useState('');
   const [reserveSaving, setReserveSaving] = useState(false);
 
+  const [ajustes, setAjustes] = useState([]);
+
   useEffect(() => {
     if (!period) return;
-    Promise.all([getBodega(period.id), getBodegaAssignments(period.id)]).then(([itms, asns]) => {
+    Promise.all([
+      getBodega(period.id), getBodegaAssignments(period.id), getAdjustments(period.id),
+    ]).then(([itms, asns, ajs]) => {
       setBodega(itms);
       setBodegaAssignments(asns);
+      setAjustes((ajs || []).filter(a => a.family_id === user.id));
     });
-  }, [period]);
+  }, [period, user.id]);
 
   const cart = carts[user.id] || {};
   const setCart = fn => setCarts(p => ({ ...p, [user.id]: fn(p[user.id] || {}) }));
@@ -411,6 +418,8 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   const daysToDelivery = period?.date_delivery ? Math.ceil((new Date(period.date_delivery + 'T23:59:59') - now) / 864e5) : null;
   const alertaCierre = daysLeft !== null && daysLeft >= 0 && daysLeft <= 1;
   const alertaEntrega = daysToDelivery !== null && daysToDelivery >= 0 && daysToDelivery <= 1;
+
+  const cuenta = cuentaDeFamilia({ ord, ajustes, cargo, saldo });
 
   const ordItems = ord ? (Array.isArray(ord.items) ? ord.items : (() => { try { return JSON.parse(ord.items); } catch { return []; } })()) : [];
 
@@ -624,27 +633,65 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                     </div>
                   </div>
                 ))}
+                {/* Los ajustes se muestran uno por uno, no fundidos en el total.
+                    Si a alguien le cambia lo que debe, tiene derecho a ver por qué. */}
+                {ajustes.length > 0 && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: '#e65100', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Cambios en tu pedido
+                    </p>
+                    {ajustes.map(a => {
+                      const cfg = TIPOS[a.type] || {};
+                      return (
+                        <div key={a.id} style={{ padding: '0.7rem 0.9rem', background: cfg.bg, border: `1px solid ${cfg.color}33`, borderRadius: '8px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '9px' }}>
+                          <span style={{ fontSize: '15px' }}>{cfg.ic}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: '12px', fontWeight: 600, margin: 0, color: '#333' }}>
+                              {a.product_name} <span style={{ color: '#888', fontWeight: 400 }}>×{a.qty}</span>
+                            </p>
+                            <p style={{ fontSize: '10px', color: '#777', margin: '2px 0 0' }}>
+                              {a.type === 'no_confirmado' ? 'El proveedor no lo trajo — no se te cobra'
+                                : a.type === 'faltante' ? 'No llegó a tu caja — se te devuelve'
+                                : a.paid ? 'Extra que ya pagaste' : 'Extra que te llevaste — se suma'}
+                              {a.note && ' · ' + a.note}
+                            </p>
+                          </div>
+                          <span style={{ fontSize: '13px', fontWeight: 700, color: cfg.color, whiteSpace: 'nowrap' }}>
+                            {a.type === 'extra' && a.paid ? 'pagado' : (a.amount > 0 ? '+' : '') + clp(a.amount)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 <div style={{ background: 'white', border: '1px solid #c8e6c9', borderRadius: '8px', padding: '1rem', marginTop: '1rem' }}>
                   <p style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Resumen del pedido</p>
                   {[
-                    { l: 'Subtotal productos', v: '$' + ord.total.toLocaleString('es-CL') },
-                    { l: 'Cargo fijo', v: '$' + cargo.toLocaleString('es-CL') },
-                  ].map(r => (
+                    { l: 'Subtotal productos', v: cuenta.subtotal, mostrar: true },
+                    { l: 'Cargo fijo', v: cuenta.cargo, mostrar: cuenta.cargo > 0 },
+                    { l: '📭 No confirmados por el proveedor', v: cuenta.noConfirmados, mostrar: cuenta.noConfirmados !== 0 },
+                    { l: '❗ Faltantes en tu caja', v: cuenta.faltantes, mostrar: cuenta.faltantes !== 0 },
+                    { l: '➕ Extras', v: cuenta.extras, mostrar: cuenta.extras !== 0 },
+                    { l: 'Saldo anterior (' + (saldo > 0 ? 'a favor' : 'pendiente') + ')', v: -saldo, mostrar: saldo !== 0 },
+                  ].filter(r => r.mostrar).map(r => (
                     <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f0f7f0' }}>
                       <span style={{ fontSize: '13px', color: '#555' }}>{r.l}</span>
-                      <span style={{ fontSize: '13px', fontWeight: 500 }}>{r.v}</span>
+                      <span style={{ fontSize: '13px', fontWeight: 500, color: r.v < 0 ? '#2e7d32' : '#333' }}>
+                        {r.v < 0 ? '− ' : ''}{clp(Math.abs(r.v))}
+                      </span>
                     </div>
                   ))}
-                  {saldo !== 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f0f7f0' }}>
-                      <span style={{ fontSize: '13px', color: '#555' }}>Saldo anterior ({saldo > 0 ? 'a favor' : 'pendiente'})</span>
-                      <span style={{ fontSize: '13px', fontWeight: 500, color: saldo > 0 ? '#2e7d32' : '#c62828' }}>{saldo > 0 ? '−' : '+'} ${Math.abs(saldo).toLocaleString('es-CL')}</span>
-                    </div>
-                  )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0' }}>
                     <span style={{ fontSize: '14px', fontWeight: 700, color: '#2d5a2d' }}>Total a pagar</span>
-                    <span style={{ fontSize: '16px', fontWeight: 700, color: '#2d5a2d' }}>${Math.max(0, ord.total + cargo - saldo).toLocaleString('es-CL')}</span>
+                    <span style={{ fontSize: '16px', fontWeight: 700, color: '#2d5a2d' }}>{clp(cuenta.aPagar)}</span>
                   </div>
+                  {cuenta.quedaAFavor > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 0' }}>
+                      <span style={{ fontSize: '12px', color: '#2e7d32' }}>Te quedará a favor</span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32' }}>{clp(cuenta.quedaAFavor)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : !puedeOrdenar ? (
@@ -775,18 +822,18 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
 
         {/* MI SALDO */}
         {tab === 'balance' && (
-          <SaldoFamilia user={currentUser} ord={ord} cargo={cargo} period={period} />
+          <SaldoFamilia user={currentUser} ord={ord} cargo={cargo} period={period} ajustes={ajustes} />
         )}
       </div>
     </div>
   );
 }
 
-function SaldoFamilia({ user, ord, cargo, period }) {
+function SaldoFamilia({ user, ord, cargo, period, ajustes = [] }) {
   const saldo = user.balance || 0;
-  const totalPedido = ord ? ord.total + cargo : 0;
-  const totalAPagar = Math.max(0, totalPedido - saldo);
-  const saldoFavor = saldo > totalPedido ? saldo - totalPedido : 0;
+  const cuenta = cuentaDeFamilia({ ord, ajustes, cargo, saldo });
+  const totalAPagar = cuenta.aPagar;
+  const saldoFavor = cuenta.quedaAFavor;
 
   return (
     <div>
@@ -819,6 +866,18 @@ function SaldoFamilia({ user, ord, cargo, period }) {
                 <span style={{ fontSize: '13px', color: '#555' }}>Cargo fijo</span>
                 <span style={{ fontSize: '13px', fontWeight: 500 }}>${cargo.toLocaleString('es-CL')}</span>
               </div>
+              {[
+                { l: '📭 No confirmados por el proveedor', v: cuenta.noConfirmados },
+                { l: '❗ Faltantes en tu caja', v: cuenta.faltantes },
+                { l: '➕ Extras', v: cuenta.extras },
+              ].filter(r => r.v !== 0).map(r => (
+                <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f0f7f0' }}>
+                  <span style={{ fontSize: '13px', color: '#555' }}>{r.l}</span>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: r.v < 0 ? '#2e7d32' : '#1565c0' }}>
+                    {r.v < 0 ? '− ' : '+ '}{clp(Math.abs(r.v))}
+                  </span>
+                </div>
+              ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 0' }}>
                 <span style={{ fontSize: '14px', fontWeight: 700, color: '#2d5a2d' }}>Total a pagar</span>
                 <span style={{ fontSize: '17px', fontWeight: 700, color: totalAPagar > 0 ? '#c62828' : '#2e7d32' }}>${totalAPagar.toLocaleString('es-CL')}</span>
@@ -866,6 +925,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
     { id: 'pedidos', l: 'Pedidos', ic: '📋' },
     { id: 'consolidado', l: 'Consolidado', ic: '🧾' },
     { id: 'retiros', l: 'Retiros', ic: '🚚' },
+    { id: 'ajustes', l: 'Faltantes y Extras', ic: '⚖️' },
     { id: 'flujo', l: 'Flujo Caja', ic: '💵' },
     { id: 'bodega', l: 'Bodega', ic: '🏪' },
     { id: 'familias', l: 'Familias', ic: '👥' },
@@ -942,6 +1002,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
         {tab === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} />}
         {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
+        {tab === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargo={cargo} />}
         {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
         {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
         {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
