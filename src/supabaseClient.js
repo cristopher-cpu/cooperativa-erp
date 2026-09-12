@@ -24,6 +24,12 @@ export async function getFamilies() {
   return previo || [];
 }
 
+// `npm start` levanta solo el servidor de React, que no ejecuta la carpeta /api:
+// cualquier llamada a un endpoint devuelve 404. Sin esto, trabajar en local sería
+// imposible porque nadie podría entrar.
+const EN_LOCAL = typeof window !== 'undefined' &&
+  ['localhost', '127.0.0.1', '::1', ''].includes(window.location.hostname);
+
 // El PIN se verifica en el servidor. Devuelve { family } o { error }.
 export async function loginFamily(familyId, pin) {
   try {
@@ -35,11 +41,26 @@ export async function loginFamily(familyId, pin) {
     const text = await res.text();
     let body = null;
     try { body = JSON.parse(text); } catch { /* no era JSON */ }
+
+    // 404 = el endpoint no existe. En local se deja pasar; en producción jamás,
+    // porque ahí un 404 significa que algo se rompió, no que falte el backend.
+    if (res.status === 404 && EN_LOCAL) {
+      console.warn('loginFamily: /api/login no existe (npm start no ejecuta /api). Acceso sin verificar PIN. Usa `vercel dev` para probarlo de verdad.');
+      return { ok: true, sinVerificar: true };
+    }
+
     if (!res.ok) {
-      return { error: (body && body.error) || 'No se pudo verificar el acceso (' + res.status + ')', necesitaPin: body && body.necesitaPin };
+      return {
+        error: (body && body.error) || 'No se pudo verificar el acceso (' + res.status + ' desde ' + window.location.origin + ')',
+        necesitaPin: body && body.necesitaPin,
+      };
     }
     return body || { error: 'Respuesta vacía del servidor' };
   } catch (e) {
+    if (EN_LOCAL) {
+      console.warn('loginFamily: sin backend en local, acceso sin verificar PIN.');
+      return { ok: true, sinVerificar: true };
+    }
     return { error: 'No se pudo contactar al servidor: ' + e.message };
   }
 }
