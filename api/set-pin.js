@@ -59,6 +59,13 @@ module.exports = async (req, res) => {
     return res.status(200).json({ ok: true, tienePin: true });
   } catch (e) {
     console.error('set-pin:', e);
+    // El error de PostgREST por columna inexistente es incomprensible para quien
+    // está en el panel; se traduce a algo accionable.
+    if (/pin_hash|pin_set_at/.test(e.message || '')) {
+      return res.status(409).json({
+        error: 'Falta ejecutar la migración en Supabase (db/migrations/003_pin_cifrado.sql). Hasta entonces no se pueden guardar PIN.',
+      });
+    }
     return res.status(500).json({ error: 'No se pudo guardar el PIN. Intenta de nuevo.' });
   }
 };

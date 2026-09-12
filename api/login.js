@@ -36,6 +36,26 @@ function bloqueado(clave) {
   return prev.n >= MAX_INTENTOS;
 }
 
+// ¿La base ya tiene las columnas de la migración 003?
+//
+// Sin esto, exigir PIN a los administradores deja a TODO EL MUNDO fuera cuando la
+// migración aún no ha corrido: no hay dónde guardar el PIN, así que ningún admin
+// puede tener uno, así que ninguno puede entrar — y asignar un PIN exige estar
+// dentro. Un control de seguridad que la base todavía no puede sostener no debe
+// aplicarse: no deja el sistema seguro, lo deja inutilizable. La exigencia se
+// enciende sola en cuanto exista la columna.
+let soportaPinCache = null;
+async function soportaPin() {
+  if (soportaPinCache !== null) return soportaPinCache;
+  try {
+    await sb('/families?select=pin_hash&limit=1');
+    soportaPinCache = true;
+  } catch {
+    soportaPinCache = false;
+  }
+  return soportaPinCache;
+}
+
 // Lo que se devuelve al navegador. Nunca pin ni pin_hash.
 function familiaPublica(f) {
   return {
@@ -66,6 +86,19 @@ module.exports = async (req, res) => {
     if (!fam) return res.status(404).json({ error: 'Esa familia ya no existe' });
 
     const esAdmin = fam.role === 'admin';
+    const conPin = await soportaPin();
+
+    if (!conPin) {
+      // Migración 003 pendiente: se mantiene el comportamiento anterior. No abre
+      // ningún agujero nuevo — antes de la migración nadie tenía PIN de todos
+      // modos — pero evita dejar la cooperativa encerrada fuera.
+      console.warn('login: migración 003 pendiente, exigencia de PIN desactivada');
+      return res.status(200).json({
+        ok: true,
+        family: familiaPublica(fam),
+        avisoMigracion: 'La migración 003 no ha corrido: el acceso por PIN está inactivo y cualquiera puede entrar. Ejecuta db/migrations/003_pin_cifrado.sql en Supabase.',
+      });
+    }
 
     if (!fam.pin_hash) {
       // Un administrador sin PIN es exactamente el agujero que este parche viene
