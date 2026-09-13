@@ -291,6 +291,12 @@ export function metricasProveedores({ providers = [], purchaseOrders = [], adjus
     const ordenes = purchaseOrders.filter(o => o.provider_id === pv.id && o.sent_at);
     const confirmadas = ordenes.filter(o => o.status === 'confirmada' && o.confirmed_at);
 
+    // Una respuesta que hubo que ir a buscar por teléfono no es lo mismo que
+    // una que el proveedor dio solo. Cuenta como respuesta —la cooperativa sabe
+    // qué va a llegar— pero el trabajo lo hizo la comisión, y eso se ve.
+    const porComision = confirmadas.filter(o => o.confirmed_source === 'comision').length;
+    const porSuCuenta = confirmadas.length - porComision;
+
     let aTiempo = 0, conLimite = 0, sumaHoras = 0, conHoras = 0;
     confirmadas.forEach(o => {
       const enviado = new Date(o.sent_at);
@@ -330,6 +336,9 @@ export function metricasProveedores({ providers = [], purchaseOrders = [], adjus
       is_member: !!pv.is_member,
       enviadas: ordenes.length,
       confirmadas: confirmadas.length,
+      porComision,
+      porSuCuenta,
+      pctAutonomia: confirmadas.length ? Math.round(porSuCuenta / confirmadas.length * 100) : null,
       sinResponder: ordenes.length - confirmadas.length,
       pctConfirma,
       aTiempo,
@@ -358,3 +367,124 @@ export function ordenesVencidasSinConfirmar(purchaseOrders = [], period, ahora =
   if (ahora <= limite) return [];
   return purchaseOrders.filter(o => o.sent_at && o.status !== 'confirmada');
 }
+
+// ── Ventana de pedidos ──────────────────────────────────────────────────────
+//
+// Una sola función decide si las familias pueden pedir y si la orden de compra
+// puede salir, porque son la misma pregunta vista desde los dos lados: mientras
+// una familia todavía pueda agregar un producto, el consolidado no es final y
+// comprarle al proveedor contra él significa comprarle de menos.
+//
+// Se cierra de dos maneras y ambas valen:
+//   · sola, al pasar `date_to` (la fecha que se le anunció a las familias)
+//   · a mano, con `orders_closed_at` (la comisión cierra antes o sin fecha puesta)
+//
+// Nada que ver con cerrar el PERÍODO, que es el corte contable y viene después.
+export function estadoPedidos(period, ahora = new Date()) {
+  if (!period || !period.active) {
+    return { fase: 'sin_periodo', abiertos: false, cerrados: false, texto: 'No hay período activo' };
+  }
+
+  const apertura = period.date_from ? new Date(period.date_from + 'T00:00:00') : null;
+  const cierre = period.date_to ? new Date(period.date_to + 'T23:59:59') : null;
+  const manual = period.orders_closed_at ? new Date(period.orders_closed_at) : null;
+
+  if (manual && !isNaN(manual)) {
+    return {
+      fase: 'cerrados', abiertos: false, cerrados: true, porFecha: false, cuando: manual,
+      texto: 'Pedidos cerrados a mano el ' + manual.toLocaleDateString('es-CL', { day: 'numeric', month: 'long' }),
+    };
+  }
+
+  if (cierre && ahora > cierre) {
+    return {
+      fase: 'cerrados', abiertos: false, cerrados: true, porFecha: true, cuando: cierre,
+      texto: 'Pedidos cerrados el ' + cierre.toLocaleDateString('es-CL', { day: 'numeric', month: 'long' }),
+    };
+  }
+
+  if (apertura && ahora < apertura) {
+    return {
+      fase: 'por_abrir', abiertos: false, cerrados: false, cuando: apertura,
+      texto: 'Los pedidos abren el ' + apertura.toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' }),
+    };
+  }
+
+  // Sin fecha de cierre no hay nada que espere solo: alguien tiene que cerrar.
+  if (!cierre) {
+    return {
+      fase: 'abiertos', abiertos: true, cerrados: false, sinFecha: true,
+      texto: 'Pedidos abiertos, sin fecha de cierre definida',
+    };
+  }
+
+  // Días de calendario, no horas: faltando 3 días y 12 horas la gente entiende
+  // "en 3 días", no "en 4". Math.round absorbe además el cambio de hora.
+  const hoy0 = new Date(ahora); hoy0.setHours(0, 0, 0, 0);
+  const cierre0 = new Date(period.date_to + 'T00:00:00');
+  const dias = Math.round((cierre0 - hoy0) / 864e5);
+  return {
+    fase: 'abiertos', abiertos: true, cerrados: false, sinFecha: false, cuando: cierre, diasRestantes: dias,
+    texto: dias <= 0 ? 'Los pedidos cierran hoy'
+      : dias === 1 ? 'Los pedidos cierran mañana'
+      : 'Los pedidos cierran en ' + dias + ' días',
+  };
+}
+
+// ── Qué dijo el proveedor de cada producto ──────────────────────────────────
+//
+// Traduce las órdenes de compra a un mapa producto → estado, que es como lo
+// necesita cualquier pantalla que muestre un pedido. Sin esto, una familia veía
+// su "total a pagar" sin enterarse de que el proveedor ya había avisado que no
+// traía la mitad.
+//
+// Estados posibles:
+//   sin_orden        · todavía no se le envió orden a ese proveedor
+//   esperando        · enviada, dentro del plazo, sin respuesta
+//   asumido_completo · venció el plazo sin respuesta → la cooperativa asume que trae todo
+//   completo · parcial · no_disponible  · el proveedor (o la comisión) respondió
+export function estadoConfirmacionPorProducto(purchaseOrders = [], period = null, ahora = new Date()) {
+  const mapa = new Map();
+  const limite = period?.date_confirm_until ? new Date(period.date_confirm_until + 'T23:59:59') : null;
+  const vencido = limite ? ahora > limite : false;
+
+  (purchaseOrders || [])
+    .filter(o => o.sent_at)
+    .slice()
+    .sort((a, b) => new Date(a.sent_at) - new Date(b.sent_at))  // la más reciente pisa
+    .forEach(o => {
+      const confirmada = o.status === 'confirmada';
+      (o.lines || []).forEach(l => {
+        if (l.product_id == null) return;
+        let estado;
+        if (!confirmada) estado = vencido ? 'asumido_completo' : 'esperando';
+        else if (l.available === false || Number(l.confirmed_qty) === 0) estado = 'no_disponible';
+        else if (l.confirmed_qty != null && Number(l.confirmed_qty) < Number(l.qty)) estado = 'parcial';
+        else estado = 'completo';
+
+        mapa.set(l.product_id, {
+          estado,
+          proveedor: o.provider_name,
+          pedido: Number(l.qty) || 0,
+          confirmado: l.confirmed_qty != null ? Number(l.confirmed_qty) : null,
+          confirmadoEl: o.confirmed_at || null,
+          porComision: o.confirmed_source === 'comision',
+          registradoPor: o.confirmed_by_name || null,
+          nota: o.provider_note || null,
+        });
+      });
+    });
+
+  return mapa;
+}
+
+// Cómo se ve cada estado. En un solo lugar para que la familia y la comisión no
+// lean dos colores distintos del mismo hecho.
+export const ESTADOS_CONFIRMACION = {
+  sin_orden:        { txt: 'Sin pedir al proveedor', corto: 'Sin orden',  color: '#888',    bg: '#f5f5f5', ic: '·' },
+  esperando:        { txt: 'Esperando al proveedor', corto: 'Esperando',  color: '#1565c0', bg: '#e3f2fd', ic: '⏳' },
+  asumido_completo: { txt: 'Sin respuesta — se asume que llega', corto: 'Se asume', color: '#6a1b9a', bg: '#f3e5f5', ic: '≈' },
+  completo:         { txt: 'Confirmado por el proveedor', corto: 'Confirmado', color: '#2e7d32', bg: '#e8f5e9', ic: '✓' },
+  parcial:          { txt: 'El proveedor trae solo una parte', corto: 'Parcial', color: '#e65100', bg: '#fff3e0', ic: '≈' },
+  no_disponible:    { txt: 'El proveedor no lo trae', corto: 'No lo trae', color: '#c62828', bg: '#ffebee', ic: '✕' },
+};

@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders } from './supabaseClient';
-import { cuentaDeFamilia, ajustesPorFamilia, metricasProveedores } from './calculos';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders } from './supabaseClient';
+import {
+  cuentaDeFamilia, ajustesPorFamilia, metricasProveedores, estadoPedidos,
+  estadoConfirmacionPorProducto, ESTADOS_CONFIRMACION,
+} from './calculos';
 import { PERFILES, rolesDe, esDelPanel, etiquetasDe } from './perfiles';
 import { CumplimientoProveedores } from './CumplimientoProveedores';
 
@@ -117,7 +120,19 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
   const [expandedFam, setExpandedFam] = useState(null);
   const [srch, setSrch] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
+  const [ordenesProv, setOrdenesProv] = useState([]);
   const sc = Object.keys(sealed).length;
+
+  // Al abrir un pedido hay que poder ver, línea por línea, qué dijo el proveedor.
+  // Sin esto había que cruzar a mano esta pestaña con el consolidado.
+  useEffect(() => {
+    if (!period) { setOrdenesProv([]); return; }
+    let cancel = false;
+    getPurchaseOrders(period.id).then(d => { if (!cancel) setOrdenesProv(d || []); });
+    return () => { cancel = true; };
+  }, [period]);
+
+  const estadoProd = useMemo(() => estadoConfirmacionPorProducto(ordenesProv, period), [ordenesProv, period]);
 
   const getItems = (ord) => {
     try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
@@ -187,12 +202,23 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
 
             {isExp && o && (
               <div style={{ borderTop: '1px solid #f0f7f0', padding: '0.75rem 1rem', background: '#fafffe' }}>
-                {items.filter(i => i.qty > 0).map(i => (
-                  <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f0f7f0', fontSize: '12px' }}>
-                    <span style={{ color: '#333', fontWeight: 500 }}>{i.n}</span>
-                    <span style={{ color: '#555' }}>{i.u} × {i.qty} = <strong>${(i.p * i.qty).toLocaleString('es-CL')}</strong></span>
-                  </div>
-                ))}
+                {items.filter(i => i.qty > 0).map(i => {
+                  const ec = estadoProd.get(i.id);
+                  const st = ec ? ESTADOS_CONFIRMACION[ec.estado] : null;
+                  return (
+                    <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '5px 0', borderBottom: '1px solid #f0f7f0', fontSize: '12px' }}>
+                      <span style={{ color: '#333', fontWeight: 500, minWidth: 0 }}>
+                        {i.n}
+                        {st && (
+                          <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '8px', background: st.bg, color: st.color, marginLeft: '7px', whiteSpace: 'nowrap' }}>
+                            {st.ic} {st.corto}
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ color: '#555', whiteSpace: 'nowrap' }}>{i.u} × {i.qty} = <strong>${(i.p * i.qty).toLocaleString('es-CL')}</strong></span>
+                    </div>
+                  );
+                })}
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', color: '#666', borderBottom: '1px solid #f0f7f0' }}>
                   <span>Cargo fijo</span><span>${cargo.toLocaleString('es-CL')}</span>
                 </div>
@@ -1118,6 +1144,11 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
   const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '', date_confirm_until: period?.date_confirm_until || '', date_adjust_until: period?.date_adjust_until || '' });
   const [loading, setLoading] = useState(false);
   const [dateErr, setDateErr] = useState('');
+  // Las fechas se muestran, no se editan por defecto. Un campo de fecha siempre
+  // abierto invita a cambiarlo sin querer, y estas fechas ya se le anunciaron a
+  // las familias: modificarlas es una decisión, no un descuido.
+  const [editandoFechas, setEditandoFechas] = useState(false);
+  const [cerrandoPedidos, setCerrandoPedidos] = useState(false);
   const [showClose, setShowClose] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newMonth, setNewMonth] = useState('');
@@ -1236,7 +1267,35 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
     await updatePeriod(period.id, clean);
     setPeriod(p => ({ ...p, ...clean }));
     logAction('period_dates_updated', `Fechas actualizadas en período: ${period.label} — Apertura: ${clean.date_from || 'N/A'}, Cierre: ${clean.date_to || 'N/A'}, Entrega: ${clean.date_delivery || 'N/A'}`);
+    setEditandoFechas(false);
     setLoading(false);
+  };
+
+  // ── Cierre de la ventana de pedidos ───────────────────────────────────────
+  // Distinto de cerrar el período: esto solo congela lo que las familias
+  // pidieron, para que el consolidado que se le manda al proveedor sea el
+  // definitivo. El período sigue abierto y todavía falta recibir, entregar,
+  // ajustar y cobrar.
+  const pedidos = estadoPedidos(period);
+
+  const cambiarVentanaPedidos = async (cerrar) => {
+    const aviso = cerrar
+      ? 'Se cierran los pedidos de ' + period.label + '.\n\nLas familias ya no podrán agregar ni modificar nada, y recién ahí se habilitan las órdenes de compra.\n\nSe puede reabrir si hace falta.'
+      : 'Se reabren los pedidos de ' + period.label + '.\n\nSi ya enviaste órdenes de compra, lo que se pida ahora NO estará en ellas: tendrías que reenviarlas.';
+    if (!window.confirm(aviso)) return;
+
+    setCerrandoPedidos(true);
+    const valor = cerrar ? new Date().toISOString() : null;
+    const res = await updatePeriod(period.id, { orders_closed_at: valor });
+    if (res && res._faltaMigracion) {
+      setDateErr('Falta correr la migración 006 en Supabase: sin ella no se puede cerrar la ventana de pedidos a mano. Por ahora los pedidos se cierran solos al pasar la fecha de cierre.');
+    } else {
+      setPeriod(p => ({ ...p, orders_closed_at: valor }));
+      logAction(cerrar ? 'orders_closed' : 'orders_reopened',
+        (cerrar ? 'Pedidos cerrados' : 'Pedidos reabiertos') + ' en período: ' + period.label);
+      setDateErr('');
+    }
+    setCerrandoPedidos(false);
   };
 
   const handleClosePeriod = async () => {
@@ -1336,26 +1395,135 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
           <div style={{ height: '6px', width: pct + '%', background: '#4CAF50', borderRadius: '3px', transition: 'width 0.3s' }} />
         </div>
 
-        <p style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 1rem', color: '#333' }}>Fechas del período</p>
-        <div style={{ display: 'grid', gap: '10px', marginBottom: '1.25rem' }}>
-          {[{ key: 'date_from', l: 'Apertura de pedidos' }, { key: 'date_to', l: 'Cierre de pedidos' }, { key: 'date_confirm_until', l: 'Límite confirmación proveedores' }, { key: 'date_delivery', l: 'Fecha de entrega' }, { key: 'date_adjust_until', l: 'Límite de ajustes (faltantes/extras)' }].map(f => (
-            <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <label style={{ fontSize: '12px', color: '#666', minWidth: '170px' }}>{f.l}</label>
-              <input type="date" value={dates[f.key]} onChange={e => setDates(p => ({ ...p, [f.key]: e.target.value }))}
-                style={{ flex: 1, padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px' }} />
-            </div>
-          ))}
-        </div>
+        {(() => {
+          const CAMPOS = [
+            { key: 'date_from', l: 'Apertura de pedidos', ic: '📅', ayuda: 'Desde cuándo las familias pueden armar su pedido' },
+            { key: 'date_to', l: 'Cierre de pedidos', ic: '⏰', ayuda: 'Último día para pedir. Al pasar, los pedidos se cierran solos' },
+            { key: 'date_confirm_until', l: 'Límite confirmación proveedores', ic: '📨', ayuda: 'Si no responden antes, se asume que traen todo y se cobra completo' },
+            { key: 'date_delivery', l: 'Fecha de entrega', ic: '🚚', ayuda: 'El día del retiro' },
+            { key: 'date_adjust_until', l: 'Límite de ajustes', ic: '✏️', ayuda: 'Hasta cuándo las familias pueden avisar faltantes y extras' },
+          ];
 
-        {dateErr && (
-          <div style={{ padding: '8px 12px', background: '#ffebee', border: '1px solid #ef9a9a', borderRadius: '6px', marginBottom: '10px' }}>
-            <p style={{ fontSize: '12px', color: '#c62828', margin: 0, fontWeight: 500 }}>⚠ {dateErr}</p>
+          const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+          const relativo = (iso) => {
+            if (!iso) return null;
+            const d = new Date(iso + 'T00:00:00');
+            const dias = Math.round((d - hoy) / 864e5);
+            if (dias === 0) return { txt: 'hoy', color: '#e65100' };
+            if (dias === 1) return { txt: 'mañana', color: '#e65100' };
+            if (dias > 1) return { txt: 'en ' + dias + ' días', color: '#1565c0' };
+            if (dias === -1) return { txt: 'ayer', color: '#999' };
+            return { txt: 'hace ' + Math.abs(dias) + ' días', color: '#999' };
+          };
+          const largo = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' });
+
+          return (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.9rem' }}>
+                <p style={{ fontSize: '13px', fontWeight: 600, margin: 0, color: '#333' }}>Fechas del período</p>
+                {!editandoFechas && (
+                  <button onClick={() => {
+                    setDates({ date_from: period.date_from || '', date_to: period.date_to || '', date_delivery: period.date_delivery || '', date_confirm_until: period.date_confirm_until || '', date_adjust_until: period.date_adjust_until || '' });
+                    setDateErr('');
+                    setEditandoFechas(true);
+                  }}
+                    style={{ padding: '5px 12px', background: '#e3f2fd', color: '#1565c0', border: '1px solid #90caf9', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
+                    ✏ Modificar fechas
+                  </button>
+                )}
+              </div>
+
+              {!editandoFechas ? (
+                <div style={{ display: 'grid', gap: '7px', marginBottom: '0.25rem' }}>
+                  {CAMPOS.map(c => {
+                    const v = period[c.key];
+                    const rel = relativo(v);
+                    return (
+                      <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '11px', padding: '9px 11px', background: v ? '#fafffe' : '#fbfbfb', border: '1px solid ' + (v ? '#e6f0e6' : '#eee'), borderRadius: '8px' }}>
+                        <span style={{ fontSize: '17px', opacity: v ? 1 : 0.35 }}>{c.ic}</span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{c.l}</p>
+                          {v
+                            ? <p style={{ fontSize: '13px', fontWeight: 600, margin: '2px 0 0', color: '#2d5a2d', textTransform: 'capitalize' }}>{largo(v)}</p>
+                            : <p style={{ fontSize: '13px', fontWeight: 500, margin: '2px 0 0', color: '#bbb' }}>Sin definir</p>}
+                          <p style={{ fontSize: '10px', color: '#aaa', margin: '2px 0 0' }}>{c.ayuda}</p>
+                        </div>
+                        {rel && <span style={{ fontSize: '11px', fontWeight: 600, color: rel.color, whiteSpace: 'nowrap' }}>{rel.txt}</span>}
+                      </div>
+                    );
+                  })}
+                  {dateErr && (
+                    <div style={{ padding: '8px 12px', background: '#ffebee', border: '1px solid #ef9a9a', borderRadius: '6px' }}>
+                      <p style={{ fontSize: '12px', color: '#c62828', margin: 0, fontWeight: 500 }}>⚠ {dateErr}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <div style={{ background: '#fff8e1', border: '1px solid #ffe082', borderRadius: '7px', padding: '9px 12px', marginBottom: '12px' }}>
+                    <p style={{ fontSize: '11px', color: '#795548', margin: 0, lineHeight: 1.5 }}>
+                      Estas fechas ya las están viendo las familias en su pestaña <strong>Fechas</strong>. Si cambias el cierre o la entrega, avísales.
+                    </p>
+                  </div>
+                  <div style={{ display: 'grid', gap: '10px', marginBottom: '1.25rem' }}>
+                    {CAMPOS.map(c => (
+                      <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <label style={{ fontSize: '12px', color: '#666', minWidth: '170px' }}>{c.ic} {c.l}</label>
+                        <input type="date" value={dates[c.key]} onChange={e => setDates(p => ({ ...p, [c.key]: e.target.value }))}
+                          style={{ flex: 1, padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px' }} />
+                      </div>
+                    ))}
+                  </div>
+
+                  {dateErr && (
+                    <div style={{ padding: '8px 12px', background: '#ffebee', border: '1px solid #ef9a9a', borderRadius: '6px', marginBottom: '10px' }}>
+                      <p style={{ fontSize: '12px', color: '#c62828', margin: 0, fontWeight: 500 }}>⚠ {dateErr}</p>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={handleSaveDates} disabled={loading}
+                      style={{ flex: 1, padding: '9px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
+                      {loading ? 'Guardando...' : '✓ Guardar fechas'}
+                    </button>
+                    <button onClick={() => { setEditandoFechas(false); setDateErr(''); }}
+                      style={{ padding: '9px 16px', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', cursor: 'pointer', fontSize: '13px' }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
+      </div>
+
+      {/* ── Ventana de pedidos ──────────────────────────────────────────────
+          Cerrarla es lo que habilita las órdenes de compra. Va acá, junto a las
+          fechas, porque es la misma decisión: hasta cuándo se puede pedir. */}
+      <div style={{ background: 'white', borderRadius: '10px', border: '1px solid ' + (pedidos.cerrados ? '#c8e6c9' : '#ffe082'), padding: '1.25rem', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p style={{ fontSize: '13px', fontWeight: 700, margin: 0, color: pedidos.cerrados ? '#2e7d32' : '#e65100' }}>
+              {pedidos.cerrados ? '🔒 Pedidos cerrados' : '🔓 Pedidos abiertos'}
+            </p>
+            <p style={{ fontSize: '12px', color: '#666', margin: '5px 0 0', lineHeight: 1.55 }}>
+              {pedidos.cerrados
+                ? <>{pedidos.texto}. Las familias ya no pueden modificar nada y las órdenes de compra están habilitadas.</>
+                : <>{pedidos.texto}. <strong>Las órdenes de compra no se pueden enviar</strong> mientras siga abierto: el consolidado todavía puede cambiar.</>}
+            </p>
+            <p style={{ fontSize: '11px', color: '#aaa', margin: '6px 0 0' }}>
+              No es lo mismo que cerrar el período: eso viene al final, cuando ya se entregó y hay que cobrar.
+            </p>
           </div>
-        )}
-        <button onClick={handleSaveDates} disabled={loading}
-          style={{ width: '100%', padding: '9px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
-          {loading ? 'Guardando...' : '✓ Guardar fechas'}
-        </button>
+          <button onClick={() => cambiarVentanaPedidos(!pedidos.cerrados)} disabled={cerrandoPedidos}
+            style={{ padding: '8px 15px', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '12px', whiteSpace: 'nowrap', flexShrink: 0,
+              background: pedidos.cerrados ? 'white' : '#e65100',
+              color: pedidos.cerrados ? '#555' : 'white',
+              border: pedidos.cerrados ? '1px solid #dde8dd' : 'none' }}>
+            {cerrandoPedidos ? 'Guardando...' : pedidos.cerrados ? '↻ Reabrir pedidos' : '🔒 Cerrar pedidos'}
+          </button>
+        </div>
       </div>
 
       {/* Historial de períodos */}

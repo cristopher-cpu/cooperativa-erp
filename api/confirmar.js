@@ -139,6 +139,11 @@ function pantallaGracias(o) {
       <p class="big">✅</p>
       <h2>Confirmación recibida</h2>
       <p>Gracias, ${esc(o.provider_name)}. La cooperativa ya tiene tu respuesta.</p>
+      ${o.confirmed_source === 'comision'
+        ? '<p style="margin:10px 0 0;font-size:13px;color:#795548;background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:11px 13px;line-height:1.55">Esta respuesta la registró la cooperativa' +
+          (o.confirmed_by_name ? ' (' + esc(o.confirmed_by_name) + ')' : '') +
+          ' con lo que conversaron. Si algo no calza con lo que puedes entregar, escríbenos y lo corregimos.</p>'
+        : ''}
       <span class="badge">Enviada el ${new Date(o.confirmed_at).toLocaleString('es-CL')}</span>
     </div>
     <div style="padding:0 22px 22px">
@@ -206,6 +211,11 @@ module.exports = async (req, res) => {
         lines,
         confirmed_at: new Date().toISOString(),
         provider_note: (form.nota || '').trim() || null,
+        // Quién contestó. La comisión también puede registrar respuestas desde
+        // el ERP, y el indicador de cumplimiento no puede contar las dos igual.
+        confirmed_source: 'proveedor',
+        confirmed_by: null,
+        confirmed_by_name: null,
       });
 
       return send(200, pantallaGracias(actualizada || { ...orden, lines, confirmed_at: new Date().toISOString(), provider_note: form.nota }));

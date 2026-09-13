@@ -63,8 +63,22 @@ module.exports = {
     }
   },
 
-  updateOrder: (id, patch) =>
-    sb('/purchase_orders?id=eq.' + enc(id), { method: 'PATCH', body: patch }).then(r => (r && r[0]) || null),
+  // Mismo criterio que insertOrder: si falta la migración 006 la columna
+  // confirmed_source no existe, y perder la confirmación de un proveedor por
+  // una columna nueva sería mucho peor que guardarla sin etiquetar de dónde
+  // vino. Se reintenta sin los campos que la base todavía no conoce.
+  updateOrder: async (id, patch) => {
+    try {
+      const r = await sb('/purchase_orders?id=eq.' + enc(id), { method: 'PATCH', body: patch });
+      return (r && r[0]) || null;
+    } catch (e) {
+      if (!/confirmed_(source|by)/.test(e.message || '')) throw e;
+      console.warn('updateOrder: falta la migración 006, se guarda sin confirmed_source');
+      const { confirmed_source, confirmed_by, confirmed_by_name, ...resto } = patch;
+      const r = await sb('/purchase_orders?id=eq.' + enc(id), { method: 'PATCH', body: resto });
+      return (r && r[0]) || null;
+    }
+  },
 
   getProvider: (id) =>
     sb('/providers?select=*&id=eq.' + enc(id) + '&limit=1').then(r => (r && r[0]) || null),

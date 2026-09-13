@@ -215,15 +215,25 @@ export async function updateProduct(id, updates) {
 export async function updatePeriod(periodId, updates) {
   // Sanitize: DATE columns must receive null, never empty string
   const clean = { ...updates };
-  ['date_from', 'date_to', 'date_delivery', 'date_adjust_until', 'date_confirm_until'].forEach(k => {
+  ['date_from', 'date_to', 'date_delivery', 'date_adjust_until', 'date_confirm_until', 'orders_closed_at'].forEach(k => {
     if (k in clean && clean[k] === '') clean[k] = null;
   });
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('periods')
     .update(clean)
     .eq('id', periodId)
     .select()
     .single();
+
+  // Si falta la migración 006 la columna no existe todavía. Guardamos el resto
+  // igual: perder las fechas por una columna nueva sería peor que no cerrar.
+  if (error && 'orders_closed_at' in clean && /orders_closed_at/.test(error.message || '')) {
+    const { orders_closed_at, ...resto } = clean;
+    const reintento = await supabase.from('periods').update(resto).eq('id', periodId).select().single();
+    if (!reintento.error) return { ...reintento.data, _faltaMigracion: '006' };
+    error = reintento.error;
+  }
+
   if (error) console.error('updatePeriod error:', error.message);
   return data;
 }
@@ -467,6 +477,40 @@ export async function deletePurchaseOrder(id) {
   const { error } = await supabase.from('purchase_orders').delete().eq('id', id);
   if (error) { console.error('deletePurchaseOrder error:', error.message); return { error: error.message }; }
   return true;
+}
+
+// Registra la respuesta de un proveedor que no usó el enlace: la comisión lo
+// llamó y anota lo que dijo. Queda escrito quién lo anotó, porque una respuesta
+// de segunda mano no vale lo mismo que una que dio el proveedor — y el indicador
+// de cumplimiento las cuenta por separado.
+export async function confirmarOrdenManual(orderId, { lines, nota, usuario }) {
+  const base = {
+    status: 'confirmada',
+    lines,
+    confirmed_at: new Date().toISOString(),
+    provider_note: (nota || '').trim() || null,
+  };
+  const conAutor = {
+    ...base,
+    confirmed_source: 'comision',
+    confirmed_by: usuario ? usuario.id : null,
+    confirmed_by_name: usuario ? usuario.name : null,
+  };
+
+  let { data, error } = await supabase
+    .from('purchase_orders').update(conAutor).eq('id', orderId).select().single();
+
+  // Sin la migración 006 no existen las columnas de autoría. Guardar la
+  // confirmación sin firma es mejor que no poder registrarla, pero hay que
+  // decirlo: quien llama muestra el aviso de migración pendiente.
+  if (error && /confirmed_(source|by)/.test(error.message || '')) {
+    const r = await supabase.from('purchase_orders').update(base).eq('id', orderId).select().single();
+    if (!r.error) return { ...r.data, _sinFirma: true };
+    error = r.error;
+  }
+
+  if (error) { console.error('confirmarOrdenManual error:', error.message); return { error: error.message }; }
+  return data;
 }
 
 // Llama a la función serverless. Devuelve { ok, ... } o { error }.

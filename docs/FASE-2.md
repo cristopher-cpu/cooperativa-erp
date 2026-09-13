@@ -149,6 +149,65 @@ Del flujo de la cooperativa (paso 07 y 08):
 `role` pasa de texto a lista. Seis perfiles combinables, rotativos por período:
 Admin, Proveedores, Recepción, Retiro, Balance Contable, Familia.
 
+### Etapa 4b — La ventana de pedidos y la confirmación asistida ✅ (13-sep-2026)
+
+Cuatro correcciones que salieron de probar el flujo completo.
+
+**1. La orden de compra no sale con los pedidos abiertos.**
+Antes era una advertencia que se saltaba con un clic. Ahora el botón está
+deshabilitado hasta que la ventana de pedidos se cierre.
+
+Se cierra de dos maneras, y son distintas a propósito:
+
+| | Qué es | Cuándo |
+|---|---|---|
+| `date_to` | La fecha anunciada a las familias | Se cierra sola al pasar |
+| `orders_closed_at` | Cierre explícito de la comisión | Cuando alguien aprieta el botón |
+| `closed_at` | Cierre contable del período | Al final de todo, tras cobrar |
+
+Se separó `orders_closed_at` de `date_to` porque adelantar el cierre cambiando
+`date_to` borraría la fecha que se le comunicó a las familias — y esa fecha es
+un compromiso, no un parámetro. `estadoPedidos()` en `calculos.js` es la única
+fuente de verdad: la usan el panel y la vista de familia, así que no pueden
+discrepar sobre si se puede pedir o no.
+
+**2. La comisión puede registrar la confirmación por el proveedor.**
+Muchos proveedores no van a usar el enlace. Desde el consolidado se anota lo que
+dijeron por teléfono, con la misma estructura (completo / parcial / no tiene).
+
+Queda firmado: `confirmed_source` distingue `proveedor` de `comision`, y
+`confirmed_by_name` guarda quién lo anotó. **No es cosmético**: el indicador de
+cumplimiento cuenta aparte a quien responde solo y a quien hubo que ir a buscar.
+Una respuesta de segunda mano vale para operar, pero no dice lo mismo del
+proveedor.
+
+La palabra del proveedor no se puede pisar: si él contestó por el enlace, el
+botón de registrar desaparece. Solo se puede corregir lo que anotó la comisión.
+
+**3. La familia ve qué dijo el proveedor de cada producto.**
+Antes el pedido mostraba "Total a pagar" aunque el proveedor ya hubiera avisado
+que no traía la mitad. Ahora cada línea lleva su estado —confirmado, parcial, no
+lo trae, esperando, o *se asume que llega* cuando venció el plazo sin respuesta—
+y el total advierte cuánto va a bajar cuando la comisión aplique los descuentos.
+
+Se mostró el total real y no el estimado a propósito: el estimado sería inventar
+una cifra que todavía nadie registró. Lo honesto es mostrar lo que hoy se cobra y
+decir por qué va a cambiar.
+
+**4. Las fechas del período se ven antes de poder editarlas.**
+Cinco campos de fecha siempre abiertos invitan a cambiarlos sin querer. Ahora se
+muestran en modo lectura, con los días que faltan y para qué sirve cada una, y
+hay que apretar **Modificar fechas** para editarlas. Al editar aparece el
+recordatorio de que las familias ya las están viendo.
+
+La pestaña Fechas de la familia muestra las cinco (antes solo tres: le faltaban
+el límite de confirmación de proveedores y el de ajustes, que son justamente los
+que la afectan).
+
+Migración: `006_cierre_pedidos_y_confirmacion_asistida.sql`.
+Todo degrada si no se corrió: los pedidos se cierran solos por fecha y las
+confirmaciones se guardan sin firma.
+
 ### Etapa 5 — Reportes Excel
 
 Consolidado por familia, por proveedor, de faltantes, de extras, stock de bodega,
@@ -272,8 +331,22 @@ Dos riesgos conocidos y aceptados:
   P109 está cerrado, así que no afecta al período activo, pero el camino que lo
   produjo sigue abierto. Falta una restricción de unicidad en
   `(period_id, family_id)` y decidir qué hacer con las tres filas históricas.
-- Aviso de ESLint preexistente en `App.js:300` (`cart` en las dependencias de un
-  `useMemo`). Por eso el build usa `CI=false`.
+- **A las familias administradoras no se les cobra al cerrar el período.**
+  Detectado el 13-sep-2026. `AdminPeriodo` arma su lista con
+  `families.filter(f => f.role === 'familia')`, y las tres administradoras
+  (Fabián, Patricia, Ruby) son socias que también piden. El resumen del cierre
+  suma sus pedidos al total recaudado, pero el loop que descuenta saldos las
+  omite: **piden, se les compra, y no se les descuenta**.
+
+  Arreglarlo es de una línea ahora que existe `perfiles.js` —
+  `rolesDe(f).includes('familia')`, que la migración 005 dejó verdadero para
+  todas. No se tocó junto con la etapa 4b porque cambia a quién se le cobra
+  plata, y eso lo decide la cooperativa, no el código. Mismo patrón en
+  `App.js:1008`, `AdminComponents.js:333` y `AdminComponents.js:1869`.
+- El build ya compila limpio con `CI=true` (los dos avisos de `useMemo` en
+  `App.js` se corrigieron envolviendo `cart` y `ordItems`). `vercel.json` sigue
+  usando `CI=false` para que un aviso nuevo no bote un despliegue en medio de
+  las pruebas; conviene endurecerlo antes del Go Live.
 
 ---
 

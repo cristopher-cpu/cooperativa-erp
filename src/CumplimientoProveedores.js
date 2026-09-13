@@ -49,12 +49,14 @@ export function CumplimientoProveedores({ filas }) {
       <p style={{ fontSize: '13px', fontWeight: 700, color: '#333', margin: '0 0 4px' }}>🤝 Cumplimiento de proveedores</p>
       <p style={{ fontSize: '11px', color: '#888', margin: '0 0 14px', lineHeight: 1.5 }}>
         Sobre todo el histórico, no solo este período: a un proveedor se lo juzga por su costumbre, no por un mes.
+        Las respuestas que la comisión tuvo que ir a buscar por teléfono cuentan como respuesta, pero se muestran aparte.
       </p>
 
       <div style={{ display: 'flex', gap: '14px', marginBottom: '10px', fontSize: '10px', color: '#888', flexWrap: 'wrap' }}>
         <span><strong style={{ color: '#1565c0' }}>Responde</strong> · contestó la orden</span>
         <span><strong style={{ color: '#6a1b9a' }}>A tiempo</strong> · antes del plazo</span>
         <span><strong style={{ color: '#2e7d32' }}>Palabra</strong> · de lo confirmado, cuánto llegó</span>
+        <span><strong style={{ color: '#4527a0' }}>Solo/a</strong> · respondió sin que hubiera que llamarlo</span>
       </div>
 
       {filas.map(f => {
@@ -71,12 +73,18 @@ export function CumplimientoProveedores({ filas }) {
                     {f.sinResponder} sin responder
                   </span>
                 )}
+                {f.porComision > 0 && (
+                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 7px', borderRadius: '8px', background: '#ede7f6', color: '#4527a0' }}>
+                    📞 {f.porComision} por teléfono
+                  </span>
+                )}
                 <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#aaa' }}>{exp ? '▲' : '▼'}</span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
                 {[
                   { l: 'Responde', v: f.pctConfirma, c: '#1565c0' },
                   { l: 'A tiempo', v: f.pctATiempo, c: '#6a1b9a' },
+                  { l: 'Solo/a', v: f.pctAutonomia, c: '#4527a0' },
                   { l: 'Palabra', v: f.pctPalabra, c: colorPct(f.pctPalabra) },
                 ].map(m => (
                   <div key={m.l}>
@@ -95,6 +103,8 @@ export function CumplimientoProveedores({ filas }) {
                 {[
                   { l: 'Órdenes enviadas', v: f.enviadas },
                   { l: 'Respondidas', v: f.confirmadas + ' de ' + f.enviadas },
+                  { l: 'Por el enlace, sin insistir', v: f.porSuCuenta + ' de ' + (f.confirmadas || 0) },
+                  { l: 'Registradas por la comisión', v: f.porComision + (f.porComision ? ' (hubo que llamarlo)' : '') },
                   { l: 'Dentro del plazo', v: f.conLimite ? f.aTiempo + ' de ' + f.conLimite : 'ningún período tenía plazo definido' },
                   { l: 'Demora promedio en responder', v: f.horasPromedio != null ? f.horasPromedio + ' horas' : '—' },
                   { l: 'Valor que confirmó traer', v: clp(f.valorConfirmado) },

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getPurchaseOrders, sendPurchaseOrder, deletePurchaseOrder } from './supabaseClient';
-import { ordenesVencidasSinConfirmar } from './calculos';
+import { getPurchaseOrders, sendPurchaseOrder, deletePurchaseOrder, confirmarOrdenManual } from './supabaseClient';
+import { ordenesVencidasSinConfirmar, estadoPedidos } from './calculos';
 
 // ─── CONSOLIDADO Y ÓRDENES DE COMPRA ─────────────────────────────────────────
 // Responde la pregunta que hasta ahora se hacía a mano: cuánto hay que comprarle
@@ -13,13 +13,15 @@ function parseItems(ord) {
   try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
 }
 
-export function AdminConsolidado({ families, sealed, products, providers, period }) {
+export function AdminConsolidado({ families, sealed, products, providers, period, user }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
   const [sendingId, setSendingId] = useState(null);
   const [msg, setMsg] = useState(null); // { tipo:'ok'|'err', texto }
   const [estado, setEstado] = useState(null); // config del envío, desde /api/estado
+  const [confirmando, setConfirmando] = useState(null); // { orderId, lineas:[{d,q}], nota }
+  const [guardandoConf, setGuardandoConf] = useState(false);
 
   useEffect(() => {
     if (!period) { setLoading(false); return; }
@@ -93,6 +95,11 @@ export function AdminConsolidado({ families, sealed, products, providers, period
 
   const ordenDe = (providerId) => orders.find(o => o.provider_id === providerId) || null;
 
+  // La orden de compra no sale mientras las familias todavía puedan pedir: lo
+  // que se compre de menos recién se descubre el día del retiro, cuando ya no
+  // hay arreglo. Antes esto era una advertencia que se saltaba con un clic.
+  const pedidos = useMemo(() => estadoPedidos(period), [period]);
+
   // Órdenes cuyo plazo venció sin respuesta. No generan ajustes: la cooperativa
   // decidió asumir que quien no contesta sí trae todo.
   const vencidas = useMemo(() => ordenesVencidasSinConfirmar(orders, period), [orders, period]);
@@ -112,14 +119,21 @@ export function AdminConsolidado({ families, sealed, products, providers, period
     const pv = g.provider;
     if (!pv) return;
 
-    // Enviar la orden con familias sin sellar significa comprarle de menos al
-    // proveedor, y eso solo se descubre el día del retiro, cuando ya no hay
-    // arreglo posible. Vale la pena el segundo de fricción.
+    // Puerta cerrada, no advertencia: mientras una sola familia pueda agregar
+    // un producto, este consolidado no es definitivo, y lo que se compre de
+    // menos recién se descubre el día del retiro, cuando ya no hay arreglo.
+    if (!pedidos.cerrados) {
+      setMsg({ tipo: 'err', texto: 'Los pedidos siguen abiertos. Ciérralos en la pestaña Período antes de enviar órdenes de compra.' });
+      return;
+    }
+
+    // Ya cerrados, una familia sin pedido simplemente no pidió. Se avisa igual
+    // por si alguna quedó fuera por olvido y todavía conviene reabrir.
     if (sinSellar.length > 0) {
       const nombres = sinSellar.map(f => '· ' + f.name).join('\n');
-      const aviso = 'Todavía hay ' + sinSellar.length + ' familia' +
-        (sinSellar.length === 1 ? '' : 's') + ' sin sellar su pedido:\n\n' + nombres +
-        '\n\nLo que no esté sellado no entra en esta orden de compra. ¿Enviarla igual?';
+      const aviso = sinSellar.length + ' familia' + (sinSellar.length === 1 ? '' : 's') +
+        ' no alcanzó a sellar pedido:\n\n' + nombres +
+        '\n\nNo entran en esta orden de compra. ¿Enviarla igual?';
       if (!window.confirm(aviso)) return;
     }
 
@@ -158,6 +172,60 @@ export function AdminConsolidado({ families, sealed, products, providers, period
     setSendingId(null);
   };
 
+  // ── Confirmación asistida ──────────────────────────────────────────────────
+  // No todos los proveedores usan el enlace. La comisión llama por teléfono y
+  // anota lo que le dijeron, con la misma estructura que habría llenado el
+  // proveedor. Queda firmado: una respuesta de segunda mano no vale lo mismo.
+  const abrirConfirmacion = (o) => {
+    setConfirmando({
+      orderId: o.id,
+      proveedor: o.provider_name,
+      nota: o.provider_note || '',
+      lineas: (o.lines || []).map(l => {
+        const nada = l.available === false || Number(l.confirmed_qty) === 0;
+        const parcial = !nada && l.confirmed_qty != null && Number(l.confirmed_qty) < Number(l.qty);
+        return {
+          ...l,
+          d: nada ? 'no' : parcial ? 'parcial' : 'si',
+          q: l.confirmed_qty != null ? String(l.confirmed_qty) : String(l.qty),
+        };
+      }),
+    });
+    setMsg(null);
+  };
+
+  const guardarConfirmacion = async () => {
+    if (!confirmando) return;
+    setGuardandoConf(true);
+
+    const lines = confirmando.lineas.map(l => {
+      const { d, q, ...limpia } = l;
+      if (d === 'no') return { ...limpia, available: false, confirmed_qty: 0 };
+      if (d === 'parcial') {
+        let n = parseInt(q, 10);
+        if (isNaN(n) || n < 0) n = 0;
+        if (n > Number(l.qty)) n = Number(l.qty);
+        return { ...limpia, available: n > 0, confirmed_qty: n };
+      }
+      return { ...limpia, available: true, confirmed_qty: Number(l.qty) };
+    });
+
+    const res = await confirmarOrdenManual(confirmando.orderId, { lines, nota: confirmando.nota, usuario: user });
+    if (res && res.error) {
+      setMsg({ tipo: 'err', texto: res.error });
+    } else {
+      setOrders(await getPurchaseOrders(period.id));
+      setConfirmando(null);
+      setMsg({
+        tipo: 'ok',
+        texto: res && res._sinFirma
+          ? 'Respuesta registrada, pero sin quedar a nombre de nadie: falta correr la migración 006 para guardar quién la anotó.'
+          : 'Respuesta de ' + confirmando.proveedor + ' registrada' + (user ? ' por ' + user.name : '') + '.',
+      });
+    }
+    setGuardandoConf(false);
+  };
+
   if (!period) {
     return (
       <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem' }}>
@@ -179,8 +247,16 @@ export function AdminConsolidado({ families, sealed, products, providers, period
   const estadoChip = (o) => {
     if (!o) return null;
     if (o.send_error) return { bg: '#ffebee', color: '#c62828', txt: '⚠ Error de envío' };
-    if (o.status === 'confirmada') return { bg: '#e8f5e9', color: '#2e7d32', txt: '✓ Confirmada' };
-    if (o.sent_at) return { bg: '#e3f2fd', color: '#1565c0', txt: '📤 Enviada, esperando' };
+    if (o.status === 'confirmada') {
+      return o.confirmed_source === 'comision'
+        ? { bg: '#ede7f6', color: '#4527a0', txt: '📞 Confirmada por la comisión' }
+        : { bg: '#e8f5e9', color: '#2e7d32', txt: '✓ Confirmada por el proveedor' };
+    }
+    if (o.sent_at) {
+      return vencidas.some(v => v.id === o.id)
+        ? { bg: '#f3e5f5', color: '#6a1b9a', txt: '≈ Sin respuesta — se asume completa' }
+        : { bg: '#e3f2fd', color: '#1565c0', txt: '📤 Enviada, esperando' };
+    }
     return { bg: '#f5f5f5', color: '#888', txt: 'Sin enviar' };
   };
 
@@ -199,6 +275,35 @@ export function AdminConsolidado({ families, sealed, products, providers, period
           </div>
         ))}
       </div>
+
+      {/* Lo primero que hay que saber en esta pantalla es si el consolidado ya
+          es definitivo. Todo lo demás depende de eso. */}
+      {pedidos.cerrados ? (
+        <div style={{ background: '#f1f8f1', border: '1px solid #a5d6a7', borderRadius: '8px', padding: '10px 14px', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '9px' }}>
+          <span style={{ fontSize: '15px' }}>🔒</span>
+          <p style={{ fontSize: '12px', color: '#2e7d32', margin: 0, fontWeight: 600 }}>
+            {pedidos.texto} — el consolidado ya es definitivo y las órdenes se pueden enviar.
+          </p>
+        </div>
+      ) : (
+        <div style={{ background: '#fff3e0', border: '2px solid #ffb300', borderRadius: '8px', padding: '12px 15px', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#e65100', margin: 0 }}>
+            🔓 Las órdenes de compra están bloqueadas
+          </p>
+          <p style={{ fontSize: '12px', color: '#795548', margin: '6px 0 0', lineHeight: 1.55 }}>
+            {pedidos.fase === 'por_abrir'
+              ? <>Los pedidos todavía no abren ({pedidos.texto.toLowerCase()}), así que no hay nada que comprar.</>
+              : <>Mientras las familias puedan seguir pidiendo, <strong>este consolidado no es definitivo</strong>. Si la orden sale ahora, a quien pida después no se le compra nada — y eso se descubre el día del retiro, cuando ya no hay arreglo.</>}
+          </p>
+          {pedidos.abiertos && (
+            <p style={{ fontSize: '12px', color: '#795548', margin: '7px 0 0', lineHeight: 1.55 }}>
+              {pedidos.sinFecha
+                ? <>No hay fecha de cierre configurada, así que no se cierran solos: ve a <strong>Período</strong> y usa <strong>Cerrar pedidos</strong>.</>
+                : <>{pedidos.texto}. También puedes cerrarlos antes desde <strong>Período → Cerrar pedidos</strong>.</>}
+            </p>
+          )}
+        </div>
+      )}
 
       {estado && estado.modoPrueba && (
         <div style={{ background: '#fff8e1', border: '2px dashed #ffb300', borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem' }}>
@@ -258,7 +363,9 @@ export function AdminConsolidado({ families, sealed, products, providers, period
             ⏳ {sinSellar.length} familia{sinSellar.length === 1 ? '' : 's'} pendiente{sinSellar.length === 1 ? '' : 's'} por sellar
           </p>
           <p style={{ fontSize: '11px', color: '#666', margin: '5px 0 0', lineHeight: 1.55 }}>
-            Lo que no esté sellado <strong>no entra en la orden de compra</strong>. Si envías ahora, a esas familias no se les comprará nada y solo se notará el día del retiro.
+            {pedidos.cerrados
+              ? <>Los pedidos ya cerraron, así que estas familias <strong>no recibirán nada</strong> este período. Si alguna quedó fuera por olvido, reabre los pedidos en <strong>Período</strong> antes de enviar las órdenes.</>
+              : <>Lo que no esté sellado <strong>no entra en la orden de compra</strong>. Todavía están a tiempo.</>}
           </p>
           <p style={{ fontSize: '11px', color: '#8d6e63', margin: '5px 0 0' }}>
             {sinSellar.map(f => f.name).join(' · ')}
@@ -351,6 +458,12 @@ export function AdminConsolidado({ families, sealed, products, providers, period
                     <p style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32', margin: '0 0 7px' }}>
                       Respuesta del proveedor · {new Date(o.confirmed_at).toLocaleString('es-CL')}
                     </p>
+                    {o.confirmed_source === 'comision' && (
+                      <p style={{ fontSize: '11px', color: '#4527a0', background: '#f3edff', border: '1px solid #d1c4e9', borderRadius: '6px', padding: '6px 9px', margin: '0 0 8px' }}>
+                        📞 No la respondió el proveedor por el enlace: la registró
+                        {o.confirmed_by_name ? ' ' + o.confirmed_by_name : ' la comisión'} desde el ERP.
+                      </p>
+                    )}
                     {(o.lines || []).map((l, i) => {
                       const falta = l.available === false || (l.confirmed_qty != null && l.confirmed_qty < l.qty);
                       return (
@@ -377,16 +490,93 @@ export function AdminConsolidado({ families, sealed, products, providers, period
                   </p>
                 )}
 
-                {pv && (
-                  <button onClick={() => handleSend(g)} disabled={sendingId === pv.id || sinCorreo}
-                    title={sinCorreo ? 'Carga el correo del proveedor en la pestaña Proveedores' : ''}
-                    style={{ width: '100%', marginTop: '13px', padding: '11px', background: sinCorreo ? '#eee' : o && o.sent_at ? '#fff8e1' : '#4CAF50', color: sinCorreo ? '#aaa' : o && o.sent_at ? '#e65100' : 'white', border: sinCorreo ? '1px solid #ddd' : o && o.sent_at ? '1px solid #ffc107' : 'none', borderRadius: '8px', cursor: sinCorreo ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '13px' }}>
-                    {sendingId === pv.id ? 'Enviando...'
-                      : sinCorreo ? 'Sin correo — no se puede enviar'
-                      : o && o.sent_at ? '↻ Volver a enviar orden de compra'
-                      : '📧 Enviar orden de compra'}
-                  </button>
+                {/* Anotar por teléfono lo que el proveedor respondió. Solo se
+                    ofrece si la orden ya salió, y nunca pisa la palabra del
+                    proveedor: si él mismo contestó por el enlace, esta puerta
+                    se cierra. */}
+                {pv && o && o.sent_at && (o.status !== 'confirmada' || o.confirmed_source === 'comision') && (
+                  confirmando && confirmando.orderId === o.id ? (
+                    <div style={{ background: '#faf7ff', border: '1px solid #b39ddb', borderRadius: '9px', padding: '13px', marginTop: '13px' }}>
+                      <p style={{ fontSize: '12px', fontWeight: 700, color: '#4527a0', margin: 0 }}>
+                        📞 Registrar lo que respondió {pv.name}
+                      </p>
+                      <p style={{ fontSize: '11px', color: '#666', margin: '5px 0 12px', lineHeight: 1.5 }}>
+                        Para proveedores que contestan por teléfono o WhatsApp. Quedará registrado
+                        que {user ? <strong>{user.name}</strong> : 'la comisión'} lo anotó, y en Analítica
+                        cuenta aparte de las respuestas que da el proveedor por el enlace.
+                      </p>
+
+                      {confirmando.lineas.map((l, i) => (
+                        <div key={i} style={{ background: 'white', border: '1px solid #e6e0f0', borderRadius: '8px', padding: '9px 11px', marginBottom: '7px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginBottom: '7px' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#333' }}>{l.name}</span>
+                            <span style={{ fontSize: '12px', color: '#888', whiteSpace: 'nowrap' }}>pidió ×{l.qty}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '5px' }}>
+                            {[
+                              { v: 'si', t: '✓ Completo', c: '#2e7d32', bg: '#e8f5e9' },
+                              { v: 'parcial', t: '≈ Parcial', c: '#e65100', bg: '#fff3e0' },
+                              { v: 'no', t: '✕ No tiene', c: '#c62828', bg: '#ffebee' },
+                            ].map(op => (
+                              <button key={op.v}
+                                onClick={() => setConfirmando(c => ({ ...c, lineas: c.lineas.map((x, j) => j === i ? { ...x, d: op.v } : x) }))}
+                                style={{ flex: 1, padding: '6px 4px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 600,
+                                  border: '1px solid ' + (l.d === op.v ? op.c : '#e0e0e0'),
+                                  background: l.d === op.v ? op.bg : 'white',
+                                  color: l.d === op.v ? op.c : '#999' }}>
+                                {op.t}
+                              </button>
+                            ))}
+                          </div>
+                          {l.d === 'parcial' && (
+                            <div style={{ marginTop: '7px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '11px', color: '#666' }}>¿Cuántas trae? (de {l.qty})</span>
+                              <input type="number" min="0" max={l.qty} value={l.q}
+                                onChange={e => setConfirmando(c => ({ ...c, lineas: c.lineas.map((x, j) => j === i ? { ...x, q: e.target.value } : x) }))}
+                                style={{ width: '80px', padding: '5px', border: '1px solid #ffb300', borderRadius: '6px', fontSize: '13px', textAlign: 'center' }} />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                      <textarea value={confirmando.nota} placeholder="¿Dijo algo más? Plazos, cambios de precio..."
+                        onChange={e => setConfirmando(c => ({ ...c, nota: e.target.value }))}
+                        style={{ width: '100%', padding: '8px', border: '1px solid #dde8dd', borderRadius: '7px', fontSize: '12px', fontFamily: 'inherit', minHeight: '54px', resize: 'vertical', boxSizing: 'border-box', marginTop: '4px' }} />
+
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                        <button onClick={guardarConfirmacion} disabled={guardandoConf}
+                          style={{ flex: 1, padding: '9px', background: '#5e35b1', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 700, fontSize: '12px' }}>
+                          {guardandoConf ? 'Guardando...' : '✓ Guardar respuesta'}
+                        </button>
+                        <button onClick={() => setConfirmando(null)}
+                          style={{ padding: '9px 14px', background: 'white', border: '1px solid #dde8dd', borderRadius: '7px', cursor: 'pointer', fontSize: '12px' }}>Cancelar</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => abrirConfirmacion(o)}
+                      style={{ width: '100%', marginTop: '13px', padding: '9px', background: '#f3edff', color: '#4527a0', border: '1px solid #b39ddb', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '12px' }}>
+                      {o.status === 'confirmada' ? '✎ Corregir la respuesta que registró la comisión' : '📞 Registrar respuesta por teléfono'}
+                    </button>
+                  )
                 )}
+
+                {pv && (() => {
+                  const bloqueado = !pedidos.cerrados;
+                  const inhabilitado = sendingId === pv.id || sinCorreo || bloqueado;
+                  const gris = sinCorreo || bloqueado;
+                  return (
+                    <button onClick={() => handleSend(g)} disabled={inhabilitado}
+                      title={bloqueado ? 'Primero hay que cerrar los pedidos, en la pestaña Período'
+                        : sinCorreo ? 'Carga el correo del proveedor en la pestaña Proveedores' : ''}
+                      style={{ width: '100%', marginTop: '9px', padding: '11px', background: gris ? '#eee' : o && o.sent_at ? '#fff8e1' : '#4CAF50', color: gris ? '#999' : o && o.sent_at ? '#e65100' : 'white', border: gris ? '1px solid #ddd' : o && o.sent_at ? '1px solid #ffc107' : 'none', borderRadius: '8px', cursor: inhabilitado ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '13px' }}>
+                      {sendingId === pv.id ? 'Enviando...'
+                        : bloqueado ? '🔒 Cierra los pedidos para poder enviar'
+                        : sinCorreo ? 'Sin correo — no se puede enviar'
+                        : o && o.sent_at ? '↻ Volver a enviar orden de compra'
+                        : '📧 Enviar orden de compra'}
+                    </button>
+                  );
+                })()}
               </div>
             )}
           </div>

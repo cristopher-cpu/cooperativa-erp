@@ -2,9 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod, getProviders, loginFamily,
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
-  getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, getAdjustments
+  getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, getAdjustments,
+  getPurchaseOrders
 } from './supabaseClient';
-import { TIPOS, clp, cuentaDeFamilia } from './calculos';
+import {
+  TIPOS, clp, cuentaDeFamilia, parseItems, estadoPedidos, estadoConfirmacionPorProducto,
+  ESTADOS_CONFIRMACION,
+} from './calculos';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
 import { AdminProveedores } from './AdminProveedores';
@@ -322,19 +326,24 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   const [reserveSaving, setReserveSaving] = useState(false);
 
   const [ajustes, setAjustes] = useState([]);
+  // Lo que los proveedores respondieron. Sin esto la familia veía su total a
+  // pagar sin enterarse de que el proveedor ya había avisado que no traía algo.
+  const [ordenesProv, setOrdenesProv] = useState([]);
 
   useEffect(() => {
     if (!period) return;
     Promise.all([
       getBodega(period.id), getBodegaAssignments(period.id), getAdjustments(period.id),
-    ]).then(([itms, asns, ajs]) => {
+      getPurchaseOrders(period.id),
+    ]).then(([itms, asns, ajs, ocs]) => {
       setBodega(itms);
       setBodegaAssignments(asns);
       setAjustes((ajs || []).filter(a => a.family_id === user.id));
+      setOrdenesProv(ocs || []);
     });
   }, [period, user.id]);
 
-  const cart = carts[user.id] || {};
+  const cart = useMemo(() => carts[user.id] || {}, [carts, user.id]);
   const setCart = fn => setCarts(p => ({ ...p, [user.id]: fn(p[user.id] || {}) }));
   const add = id => setCart(p => ({ ...p, [id]: (p[id] || 0) + 1 }));
   const sub = id => setCart(p => ({ ...p, [id]: Math.max(0, (p[id] || 0) - 1) }));
@@ -408,13 +417,14 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
     [cat, srch, products]
   );
 
-  // Period open/closed logic
+  // Si los pedidos están abiertos lo decide estadoPedidos(), igual que en el
+  // panel: la comisión puede cerrarlos antes de la fecha y eso tiene que valer
+  // acá también, o una familia seguiría modificando un pedido ya comprado.
   const now = new Date();
-  const fechaApertura = period?.date_from ? new Date(period.date_from + 'T00:00:00') : null;
-  const fechaCierre = period?.date_to ? new Date(period.date_to + 'T23:59:59') : null;
-  const noAbierto = fechaApertura && now < fechaApertura;
-  const cerrado = fechaCierre && now > fechaCierre;
-  const puedeOrdenar = !!(period?.active && !noAbierto && !cerrado);
+  const ventana = estadoPedidos(period, now);
+  const noAbierto = ventana.fase === 'por_abrir';
+  const cerrado = ventana.cerrados;
+  const puedeOrdenar = ventana.abiertos;
 
   const daysLeft = period?.date_to ? Math.ceil((new Date(period.date_to + 'T23:59:59') - now) / 864e5) : null;
   const daysToDelivery = period?.date_delivery ? Math.ceil((new Date(period.date_delivery + 'T23:59:59') - now) / 864e5) : null;
@@ -423,7 +433,25 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
 
   const cuenta = cuentaDeFamilia({ ord, ajustes, cargo, saldo });
 
-  const ordItems = ord ? (Array.isArray(ord.items) ? ord.items : (() => { try { return JSON.parse(ord.items); } catch { return []; } })()) : [];
+  const ordItems = useMemo(() => parseItems(ord), [ord]);
+
+  const estadoProd = useMemo(
+    () => estadoConfirmacionPorProducto(ordenesProv, period, now),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ordenesProv, period]
+  );
+
+  // Lo que el proveedor ya avisó que no trae, pero que todavía nadie descontó.
+  // Sigue sumando en el total: decirlo es más honesto que mostrar una cifra que
+  // la familia sabe que va a cambiar.
+  const porDescontar = useMemo(() => {
+    const caidos = ordItems.filter(i => i.qty > 0).filter(i => {
+      const ec = estadoProd.get(i.id);
+      if (!ec || ec.estado !== 'no_disponible') return false;
+      return !ajustes.some(a => a.product_id === i.id && a.type === 'no_confirmado');
+    });
+    return { items: caidos, monto: caidos.reduce((sum, i) => sum + i.p * i.qty, 0) };
+  }, [ordItems, estadoProd, ajustes]);
 
   return (
     <div style={{ background: '#f0f7f0', minHeight: '100vh' }}>
@@ -457,7 +485,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
           {cerrado && (
             <div style={{ padding: '0.6rem 1rem', background: '#fbe9e7', borderBottom: '1px solid #ffab91', fontSize: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
               <span>🔒</span>
-              <span style={{ color: '#bf360c', fontWeight: 500 }}>Período de pedidos cerrado</span>
+              <span style={{ color: '#bf360c', fontWeight: 500 }}>{ventana.texto} — ya no se puede modificar</span>
             </div>
           )}
           {!noAbierto && !cerrado && (alertaCierre || alertaEntrega) && (
@@ -623,18 +651,36 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                   </div>
                   {!ord.retired && puedeOrdenar && <button onClick={() => unsealOrderLocal(user.id)} style={{ padding: '6px 14px', background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>Modificar</button>}
                 </div>
-                {ordItems.filter(i => i.qty > 0).map(i => (
-                  <div key={i.id} style={{ padding: '0.8rem 1rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <p style={{ fontSize: '13px', fontWeight: 500, margin: 0 }}>{i.n}</p>
-                      <p style={{ fontSize: '11px', color: '#888', margin: '3px 0 0' }}>{i.pv} · {i.u}</p>
+                {ordItems.filter(i => i.qty > 0).map(i => {
+                  const ec = estadoProd.get(i.id);
+                  const st = ESTADOS_CONFIRMACION[ec ? ec.estado : 'sin_orden'];
+                  const caido = !!ec && ec.estado === 'no_disponible';
+                  const apagado = caido ? { textDecoration: 'line-through', color: '#aaa' } : {};
+                  return (
+                    <div key={i.id} style={{ padding: '0.8rem 1rem', background: 'white', border: '1px solid ' + (caido ? '#ffcdd2' : '#dde8dd'), borderRadius: '8px', marginBottom: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <p style={{ fontSize: '13px', fontWeight: 500, margin: 0, ...apagado }}>{i.n}</p>
+                          <p style={{ fontSize: '11px', color: '#888', margin: '3px 0 0' }}>{i.pv} · {i.u}</p>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>×{i.qty}</p>
+                          <p style={{ fontSize: '13px', fontWeight: 600, margin: '2px 0 0', ...apagado }}>${(i.p * i.qty).toLocaleString('es-CL')}</p>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: '7px' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: st.bg, color: st.color, display: 'inline-block' }}>
+                          {st.ic} {st.txt}
+                        </span>
+                        {ec && ec.estado === 'parcial' && (
+                          <p style={{ fontSize: '10px', color: '#8d6e63', margin: '5px 0 0', lineHeight: 1.45 }}>
+                            Alcanza para {ec.confirmado} de las {ec.pedido} que pidió toda la cooperativa. La comisión reparte y te avisa si te toca menos.
+                          </p>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>×{i.qty}</p>
-                      <p style={{ fontSize: '13px', fontWeight: 600, margin: '2px 0 0' }}>${(i.p * i.qty).toLocaleString('es-CL')}</p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {/* Los ajustes se muestran uno por uno, no fundidos en el total.
                     Si a alguien le cambia lo que debe, tiene derecho a ver por qué. */}
                 {ajustes.length > 0 && (
@@ -685,9 +731,32 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                     </div>
                   ))}
                   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0' }}>
-                    <span style={{ fontSize: '14px', fontWeight: 700, color: '#2d5a2d' }}>Total a pagar</span>
+                    <span style={{ fontSize: '14px', fontWeight: 700, color: '#2d5a2d' }}>
+                      {ord.charged_at ? 'Total cobrado' : 'Total a pagar'}
+                    </span>
                     <span style={{ fontSize: '16px', fontWeight: 700, color: '#2d5a2d' }}>{clp(cuenta.aPagar)}</span>
                   </div>
+                  <p style={{ fontSize: '10px', color: '#aaa', margin: '4px 0 0' }}>
+                    {ord.charged_at
+                      ? 'Descontado de tu saldo al cerrar el período.'
+                      : 'Se descuenta de tu saldo cuando se cierre el período, no ahora.'}
+                  </p>
+
+                  {/* Mostrar el total sin decir que va a cambiar sería mentir a
+                      medias: el proveedor ya avisó, solo falta que la comisión
+                      lo registre. */}
+                  {porDescontar.monto > 0 && (
+                    <div style={{ background: '#fff3e0', border: '1px solid #ffcc80', borderRadius: '8px', padding: '9px 11px', marginTop: '10px' }}>
+                      <p style={{ fontSize: '11px', fontWeight: 700, color: '#e65100', margin: 0 }}>
+                        📭 Este total todavía va a bajar
+                      </p>
+                      <p style={{ fontSize: '11px', color: '#795548', margin: '4px 0 0', lineHeight: 1.5 }}>
+                        El proveedor avisó que no trae {porDescontar.items.length === 1 ? 'un producto' : porDescontar.items.length + ' productos'} de
+                        tu pedido, por {clp(porDescontar.monto)}. Cuando la comisión lo registre, tu total
+                        quedará en aproximadamente <strong>{clp(Math.max(0, cuenta.aPagar - porDescontar.monto))}</strong>.
+                      </p>
+                    </div>
+                  )}
                   {cuenta.quedaAFavor > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 0' }}>
                       <span style={{ fontSize: '12px', color: '#2e7d32' }}>Te quedará a favor</span>
@@ -788,18 +857,33 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
         {/* FECHAS */}
         {tab === 'dates' && (
           <div>
+            <div style={{ background: cerrado ? '#fbe9e7' : noAbierto ? '#e3f2fd' : '#e8f5e9', border: '1px solid ' + (cerrado ? '#ffab91' : noAbierto ? '#90caf9' : '#a5d6a7'), borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem' }}>
+              <p style={{ fontSize: '13px', fontWeight: 700, margin: 0, color: cerrado ? '#bf360c' : noAbierto ? '#1565c0' : '#2e7d32' }}>
+                {cerrado ? '🔒 Pedidos cerrados' : noAbierto ? '📅 Pedidos aún no abren' : '🛒 Pedidos abiertos'}
+              </p>
+              <p style={{ fontSize: '12px', color: '#666', margin: '4px 0 0' }}>{ventana.texto}</p>
+            </div>
+
             <div style={{ display: 'grid', gap: '10px', marginBottom: '1.5rem' }}>
-              {[{ ic: '📅', l: 'Apertura de pedidos', v: period?.date_from ? new Date(period.date_from).toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Por confirmar' },
-                { ic: '⏰', l: 'Cierre de pedidos', v: period?.date_to ? new Date(period.date_to).toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Por confirmar' },
-                { ic: '🚚', l: 'Fecha de entrega', v: period?.date_delivery ? new Date(period.date_delivery).toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Por confirmar' }].map(d => (
-                <div key={d.l} style={{ background: 'white', borderRadius: '8px', padding: '1.1rem', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid #dde8dd' }}>
-                  <span style={{ fontSize: '28px' }}>{d.ic}</span>
-                  <div>
-                    <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{d.l}</p>
-                    <p style={{ fontSize: '15px', fontWeight: 600, margin: '2px 0 0', textTransform: 'capitalize', color: '#2d5a2d' }}>{d.v}</p>
+              {[{ ic: '📅', k: 'date_from', l: 'Apertura de pedidos', s: 'Desde este día puedes armar tu pedido' },
+                { ic: '⏰', k: 'date_to', l: 'Cierre de pedidos', s: 'Último día para pedir o modificar' },
+                { ic: '📨', k: 'date_confirm_until', l: 'Los proveedores confirman hasta', s: 'Antes de esta fecha sabemos qué traen y qué no' },
+                { ic: '🚚', k: 'date_delivery', l: 'Entrega', s: 'El día del retiro' },
+                { ic: '✏️', k: 'date_adjust_until', l: 'Avisar faltantes y extras hasta', s: 'Después de esta fecha ya no puedes reclamar por tu caja' }].map(d => {
+                const iso = period && period[d.k];
+                return (
+                  <div key={d.l} style={{ background: 'white', borderRadius: '8px', padding: '1rem 1.1rem', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid #dde8dd' }}>
+                    <span style={{ fontSize: '26px', opacity: iso ? 1 : 0.3 }}>{d.ic}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <p style={{ fontSize: '11px', color: '#888', margin: 0 }}>{d.l}</p>
+                      <p style={{ fontSize: '15px', fontWeight: 600, margin: '2px 0 0', textTransform: 'capitalize', color: iso ? '#2d5a2d' : '#bbb' }}>
+                        {iso ? new Date(iso + 'T00:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Por confirmar'}
+                      </p>
+                      <p style={{ fontSize: '10px', color: '#aaa', margin: '3px 0 0' }}>{d.s}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div style={{ background: 'white', borderRadius: '8px', padding: '1.1rem', border: '1px solid #dde8dd' }}>
               <p style={{ fontWeight: 600, fontSize: '13px', marginBottom: '0.75rem', margin: '0 0 0.75rem', color: '#333' }}>Estado de tu pedido</p>
@@ -1020,7 +1104,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         {tabActiva === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
         {tabActiva === 'analitica' && <AdminAnalytics families={families} products={products} />}
         {tabActiva === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
-        {tabActiva === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} />}
+        {tabActiva === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} user={user} />}
         {tabActiva === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
         {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargo={cargo} />}
         {tabActiva === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
