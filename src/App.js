@@ -11,6 +11,7 @@ import { AdminProveedores } from './AdminProveedores';
 import { AdminConsolidado } from './AdminConsolidado';
 import { AdminAjustes } from './AdminAjustes';
 import { FamiliaAjustes } from './FamiliaAjustes';
+import { esDelPanel, tabsVisibles, etiquetasDe, esAdmin } from './perfiles';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -130,7 +131,7 @@ function App() {
     return <Welcome families={families} onLogin={login} period={period} />;
   }
 
-  if (user.role === 'admin') {
+  if (esDelPanel(user)) {
     return (
       <AdminApp
         user={user}
@@ -922,7 +923,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
   const na = families.filter(f => f.role === 'familia');
 
-  const tabs = [
+  const todasLasTabs = [
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
     { id: 'analitica', l: 'Analítica', ic: '📈' },
     { id: 'pedidos', l: 'Pedidos', ic: '📋' },
@@ -938,6 +939,15 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
     { id: 'periodo', l: 'Período', ic: '📅' },
     { id: 'actividad', l: 'Actividad', ic: '📝' },
   ];
+
+  // Cada comisión ve lo suyo. Organiza el acceso, no lo protege: mientras RLS
+  // siga apagado esto decide qué se muestra, no qué se puede hacer.
+  const tabs = tabsVisibles(user, todasLasTabs);
+  const misEtiquetas = etiquetasDe(user);
+
+  // Si el perfil no incluye la pestaña activa (por ejemplo tras un cambio de
+  // rol), se cae a la primera que sí tenga en vez de mostrar una página vacía.
+  const tabActiva = tabs.some(t => t.id === tab) ? tab : (tabs[0] ? tabs[0].id : null);
 
   if (hacerPedidoFam) {
     return (
@@ -972,12 +982,19 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '20px' }}>🛒</span>
           <div>
-            <strong style={{ fontSize: '14px', color: '#1565c0' }}>Panel Admin — Cooperativa</strong>
+            <strong style={{ fontSize: '14px', color: '#1565c0' }}>
+              {esAdmin(user) ? 'Panel Admin — Cooperativa' : 'Panel — Cooperativa Quilpueblo'}
+            </strong>
             <p style={{ fontSize: '11px', color: '#666', margin: 0 }}>{period?.label}</p>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: '#1565c0', color: 'white' }}>ADMIN</span>
+          {misEtiquetas.map(e => (
+            <span key={e.id} title={e.descripcion}
+              style={{ fontSize: '10px', fontWeight: 700, padding: '3px 9px', borderRadius: '10px', background: e.color, color: 'white', whiteSpace: 'nowrap' }}>
+              {e.ic} {e.corto}
+            </span>
+          ))}
           <span style={{ fontSize: '12px' }}>{user.name}</span>
           <button onClick={logout} style={{ padding: '4px 10px', border: '1px solid #dde8dd', borderRadius: '6px', background: 'white', cursor: 'pointer', fontSize: '11px' }}>Salir</button>
         </div>
@@ -986,7 +1003,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
       <div style={{ display: 'flex', background: 'white', borderBottom: '1px solid #dde8dd', overflowX: 'auto', alignItems: 'center' }}>
         {tabs.map(n => (
           <button key={n.id} onClick={() => setTab(n.id)}
-            style={{ flex: '0 0 auto', padding: '0.7rem 0.9rem', border: 'none', borderBottom: tab === n.id ? '2px solid #1565c0' : '2px solid transparent', background: 'none', cursor: 'pointer', color: tab === n.id ? '#1565c0' : '#666', fontWeight: tab === n.id ? 600 : 400, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+            style={{ flex: '0 0 auto', padding: '0.7rem 0.9rem', border: 'none', borderBottom: tabActiva === n.id ? '2px solid #1565c0' : '2px solid transparent', background: 'none', cursor: 'pointer', color: tabActiva === n.id ? '#1565c0' : '#666', fontWeight: tabActiva === n.id ? 600 : 400, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
             <span style={{ fontSize: '13px' }}>{n.ic}</span>
             {n.l}
           </button>
@@ -999,21 +1016,21 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         </div>
       </div>
 
-      <div style={{ padding: '1rem' }} className="tab-panel" key={tab}>
-        {tab === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
-        {tab === 'analitica' && <AdminAnalytics families={families} products={products} />}
-        {tab === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
-        {tab === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} />}
-        {tab === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
-        {tab === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargo={cargo} />}
-        {tab === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
-        {tab === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
-        {tab === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
-        {tab === 'proveedores' && <AdminProveedores providers={providers} setProviders={setProviders} products={products} setProducts={setProducts} />}
-        {tab === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}
-        {tab === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
-        {tab === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} currentAdmin={user} />}
-        {tab === 'actividad' && <AdminLogs />}
+      <div style={{ padding: '1rem' }} className="tab-panel" key={tabActiva}>
+        {tabActiva === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
+        {tabActiva === 'analitica' && <AdminAnalytics families={families} products={products} />}
+        {tabActiva === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
+        {tabActiva === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} />}
+        {tabActiva === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
+        {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargo={cargo} />}
+        {tabActiva === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
+        {tabActiva === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
+        {tabActiva === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
+        {tabActiva === 'proveedores' && <AdminProveedores providers={providers} setProviders={setProviders} products={products} setProducts={setProducts} />}
+        {tabActiva === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}
+        {tabActiva === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
+        {tabActiva === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} currentAdmin={user} />}
+        {tabActiva === 'actividad' && <AdminLogs />}
       </div>
     </div>
   );

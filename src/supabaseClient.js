@@ -10,18 +10,41 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // familia tiene PIN basta `pin_set_at`, que no revela nada.
 const FAMILY_COLS = 'id,name,initials,balance,role,email,email2,created_at,pin_set_at,last_login_at';
 
-// Columnas anteriores a la migración 003, por si el despliegue llega antes que
-// ella: sin esto la app se quedaría sin familias y nadie podría entrar.
-const FAMILY_COLS_PRE_003 = 'id,name,initials,balance,role,email,email2,created_at';
+// Cascada de columnas, de la más completa a la más antigua. Las migraciones se
+// ejecutan a mano y pueden ir por detrás del despliegue: si pidiéramos siempre
+// el conjunto completo, la app se quedaría sin familias y nadie podría entrar.
+// Cada nivel quita lo que aporta una migración que quizá aún no corrió.
+const FAMILY_COLS_CASCADA = [
+  FAMILY_COLS + ',roles',  // con 005 (perfiles múltiples)
+  FAMILY_COLS,             // con 003 (PIN cifrado)
+  'id,name,initials,balance,role,email,email2,created_at', // esquema original
+];
 
 export async function getFamilies() {
-  const { data, error } = await supabase.from('families').select(FAMILY_COLS);
-  if (!error) return data || [];
+  for (let i = 0; i < FAMILY_COLS_CASCADA.length; i++) {
+    const { data, error } = await supabase.from('families').select(FAMILY_COLS_CASCADA[i]);
+    if (!error) return data || [];
+    if (i < FAMILY_COLS_CASCADA.length - 1) {
+      console.warn('getFamilies: faltan columnas de una migración, reintentando con menos:', error.message);
+    } else {
+      console.error('getFamilies error:', error.message);
+    }
+  }
+  return [];
+}
 
-  console.warn('getFamilies: faltan columnas de la migración 003, reintentando sin ellas:', error.message);
-  const { data: previo, error: error2 } = await supabase.from('families').select(FAMILY_COLS_PRE_003);
-  if (error2) { console.error('getFamilies error:', error2.message); return []; }
-  return previo || [];
+export async function updateFamilyRoles(familyId, roles) {
+  // `role` (valor único) se mantiene sincronizado con la lista para no romper el
+  // código que todavía lo lee. Se podrá eliminar cuando nada dependa de él.
+  const legacy = roles.includes('admin') ? 'admin' : 'familia';
+  const { data, error } = await supabase
+    .from('families')
+    .update({ roles, role: legacy })
+    .eq('id', familyId)
+    .select()
+    .single();
+  if (error) { console.error('updateFamilyRoles error:', error.message); return { error: error.message }; }
+  return data;
 }
 
 // `npm start` levanta solo el servidor de React, que no ejecuta la carpeta /api:
@@ -287,12 +310,6 @@ export async function deleteCashFlowEntry(id) {
 export async function updateFamilyPin(familyId, pin) {
   const { data, error } = await supabase.from('families').update({ pin: pin || null }).eq('id', familyId).select().single();
   if (error) console.error('updateFamilyPin error:', error.message);
-  return data;
-}
-
-export async function updateFamilyRole(familyId, role) {
-  const { data, error } = await supabase.from('families').update({ role }).eq('id', familyId).select().single();
-  if (error) console.error('updateFamilyRole error:', error.message);
   return data;
 }
 

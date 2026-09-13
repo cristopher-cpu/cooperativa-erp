@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders } from './supabaseClient';
 import { cuentaDeFamilia, ajustesPorFamilia, metricasProveedores } from './calculos';
+import { PERFILES, rolesDe, esDelPanel, etiquetasDe } from './perfiles';
 import { CumplimientoProveedores } from './CumplimientoProveedores';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
@@ -675,40 +676,75 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
   };
 
   const [roleSavingId, setRoleSavingId] = useState(null);
-  const changeRole = async (f, newRole) => {
-    // Nunca dejar a la cooperativa sin administradores
-    if (newRole === 'familia' && admins.length <= 1) {
-      alert('No puedes quitar el rol al último administrador. Designa primero a otro administrador.');
+
+  // Las comisiones rotan y una familia puede estar en dos a la vez, así que se
+  // marcan y desmarcan en vez de "promover" y "degradar".
+  const toggleRol = async (f, rol) => {
+    const actuales = rolesDe(f);
+    const quitando = actuales.includes(rol);
+    const nuevos = quitando ? actuales.filter(r => r !== rol) : [...actuales, rol];
+
+    // 'familia' es la base: todas la tienen y no se quita.
+    if (!nuevos.includes('familia')) nuevos.push('familia');
+
+    // La cooperativa nunca puede quedarse sin quien administre.
+    if (rol === 'admin' && quitando && admins.length <= 1) {
+      alert('No puedes quitarle Administración al último administrador. Designa primero a otro.');
       return;
     }
-    const isSelf = currentAdmin && currentAdmin.id === f.id;
-    let msg = newRole === 'admin'
-      ? `¿Promover a "${f.name}" a Administrador?\n\nTendrá acceso completo al panel de administración.`
-      : `¿Pasar a "${f.name}" de Administrador a Familia?\n\nPerderá el acceso al panel de administración.`;
-    if (newRole === 'familia' && isSelf) msg += '\n\n⚠ Te estás quitando el rol a ti mismo: perderás el acceso al cerrar sesión.';
-    if (!window.confirm(msg)) return;
+    if (rol === 'admin' && quitando && currentAdmin && currentAdmin.id === f.id) {
+      if (!window.confirm('Te estás quitando Administración a ti mismo.\n\nPerderás el acceso al panel al cerrar sesión. ¿Continuar?')) return;
+    }
 
     setRoleSavingId(f.id);
-    const result = await updateFamilyRole(f.id, newRole);
-    if (result) {
-      setFamilies(p => p.map(x => x.id === f.id ? { ...x, role: newRole } : x));
-      if (currentAdmin) {
-        addAdminLog({
-          id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-          admin_id: currentAdmin.id,
-          admin_name: currentAdmin.name,
-          action: 'role_changed',
-          details: `${f.name}: ${newRole === 'admin' ? 'Familia → Administrador' : 'Administrador → Familia'}`
-        });
-      }
-    } else {
-      alert('Error al cambiar el rol. Intenta nuevamente.');
+    const result = await updateFamilyRoles(f.id, nuevos);
+    if (result && result.error) {
+      alert(/roles/.test(result.error)
+        ? 'Falta ejecutar db/migrations/005_perfiles_multiples.sql en Supabase.'
+        : 'Error al cambiar el perfil: ' + result.error);
+      setRoleSavingId(null);
+      return;
+    }
+    setFamilies(p => p.map(x => x.id === f.id
+      ? { ...x, roles: nuevos, role: nuevos.includes('admin') ? 'admin' : 'familia' }
+      : x));
+    if (currentAdmin) {
+      addAdminLog({
+        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.name,
+        action: 'role_changed',
+        details: `${f.name}: ${quitando ? 'quitó' : 'asignó'} ${PERFILES[rol] ? PERFILES[rol].label : rol}`,
+      });
     }
     setRoleSavingId(null);
   };
 
-  const admins = families.filter(f => f.role === 'admin');
-  const fams = families.filter(f => f.role === 'familia');
+  const renderRolesRow = (f) => (
+    <div style={{ padding: '0.5rem 1rem', background: '#fcfaff', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: '10px', color: '#aaa', marginRight: '2px' }}>👥</span>
+      {Object.entries(PERFILES).filter(([id]) => id !== 'familia').map(([id, cfg]) => {
+        const activo = rolesDe(f).includes(id);
+        return (
+          <button key={id} onClick={() => toggleRol(f, id)} disabled={roleSavingId === f.id}
+            title={cfg.descripcion}
+            style={{
+              fontSize: '10px', padding: '3px 9px', borderRadius: '10px', cursor: 'pointer', fontWeight: activo ? 700 : 400,
+              border: '1px solid ' + (activo ? cfg.color : '#e0e0e0'),
+              background: activo ? cfg.color : 'white',
+              color: activo ? 'white' : '#999',
+            }}>
+            {cfg.ic} {cfg.corto}
+          </button>
+        );
+      })}
+      {roleSavingId === f.id && <span style={{ fontSize: '10px', color: '#888' }}>guardando...</span>}
+    </div>
+  );
+
+  // Quien tenga alguna comisión aparece arriba; el resto en la lista de familias.
+  const admins = families.filter(f => esDelPanel(f));
+  const fams = families.filter(f => !esDelPanel(f));
   const filtered = fams.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
 
   // Los correos no son credenciales de acceso (se entra con nombre + PIN);
@@ -834,7 +870,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
 
       {admins.length > 0 && (
         <div style={{ marginBottom: '1.25rem' }}>
-          <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>Administradores</p>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>Con comisión asignada</p>
           {admins.map(f => (
             <div key={f.id} style={{ background: 'white', border: '1.5px solid #90caf9', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
               <div style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -845,14 +881,14 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <span style={{ fontSize: '9px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: '#1565c0', color: 'white' }}>ADMIN</span>
-                  <button onClick={() => changeRole(f, 'familia')} disabled={roleSavingId === f.id}
-                    title="Quitar rol de administrador y dejarlo como Familia"
-                    style={{ fontSize: '10px', padding: '4px 10px', background: '#fff5f5', color: '#c62828', border: '1px solid #ffcdd2', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
-                    {roleSavingId === f.id ? '...' : '⬇ Pasar a Familia'}
-                  </button>
+                  {etiquetasDe(f).map(e => (
+                    <span key={e.id} style={{ fontSize: '9px', fontWeight: 700, padding: '3px 8px', borderRadius: '10px', background: e.color, color: 'white' }}>
+                      {e.ic} {e.corto}
+                    </span>
+                  ))}
                 </div>
               </div>
+              {renderRolesRow(f)}
               {renderContactRow(f)}
               {renderPinRow(f)}
             </div>
@@ -881,13 +917,10 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                 )
               }
               {f.balance !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : ''}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
-              <button onClick={() => changeRole(f, 'admin')} disabled={roleSavingId === f.id}
-                title="Promover a Administrador"
-                style={{ fontSize: '10px', padding: '4px 10px', background: '#e3f2fd', color: '#1565c0', border: '1px solid #90caf9', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
-                {roleSavingId === f.id ? '...' : '⬆ Hacer Admin'}
-              </button>
+
             </div>
           </div>
+          {renderRolesRow(f)}
           {renderContactRow(f)}
           {renderPinRow(f)}
         </div>
