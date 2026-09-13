@@ -97,6 +97,13 @@ export function AdminConsolidado({ families, sealed, products, providers, period
   // decidió asumir que quien no contesta sí trae todo.
   const vencidas = useMemo(() => ordenesVencidasSinConfirmar(orders, period), [orders, period]);
 
+  // Familias que todavía no sellan. Enviar la orden sin ellas significa comprarle
+  // de menos al proveedor, y eso solo se descubre el día del retiro.
+  const sinSellar = useMemo(
+    () => (families || []).filter(f => !sealed[f.id]),
+    [families, sealed]
+  );
+
   const totalGeneral = grupos.reduce((s, g) => s + g.total, 0);
   const enviadas = orders.filter(o => o.sent_at).length;
   const confirmadas = orders.filter(o => o.status === 'confirmada').length;
@@ -104,6 +111,17 @@ export function AdminConsolidado({ families, sealed, products, providers, period
   const handleSend = async (g) => {
     const pv = g.provider;
     if (!pv) return;
+
+    // Enviar la orden con familias sin sellar significa comprarle de menos al
+    // proveedor, y eso solo se descubre el día del retiro, cuando ya no hay
+    // arreglo posible. Vale la pena el segundo de fricción.
+    if (sinSellar.length > 0) {
+      const nombres = sinSellar.map(f => '· ' + f.name).join('\n');
+      const aviso = 'Todavía hay ' + sinSellar.length + ' familia' +
+        (sinSellar.length === 1 ? '' : 's') + ' sin sellar su pedido:\n\n' + nombres +
+        '\n\nLo que no esté sellado no entra en esta orden de compra. ¿Enviarla igual?';
+      if (!window.confirm(aviso)) return;
+    }
 
     const previa = ordenDe(pv.id);
     if (previa) {
@@ -233,6 +251,20 @@ export function AdminConsolidado({ families, sealed, products, providers, period
           </div>
         );
       })()}
+
+      {sinSellar.length > 0 && (
+        <div style={{ background: '#fff3e0', border: '1px solid #ffb300', borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '12px', fontWeight: 700, color: '#e65100', margin: 0 }}>
+            ⏳ {sinSellar.length} familia{sinSellar.length === 1 ? '' : 's'} pendiente{sinSellar.length === 1 ? '' : 's'} por sellar
+          </p>
+          <p style={{ fontSize: '11px', color: '#666', margin: '5px 0 0', lineHeight: 1.55 }}>
+            Lo que no esté sellado <strong>no entra en la orden de compra</strong>. Si envías ahora, a esas familias no se les comprará nada y solo se notará el día del retiro.
+          </p>
+          <p style={{ fontSize: '11px', color: '#8d6e63', margin: '5px 0 0' }}>
+            {sinSellar.map(f => f.name).join(' · ')}
+          </p>
+        </div>
+      )}
 
       {msg && (
         <div style={{ background: msg.tipo === 'ok' ? '#e8f5e9' : '#ffebee', border: `1px solid ${msg.tipo === 'ok' ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem', display: 'flex', alignItems: 'flex-start', gap: '9px' }}>

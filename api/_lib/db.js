@@ -45,8 +45,23 @@ module.exports = {
   getOrderByToken: (token) =>
     sb('/purchase_orders?select=*&token=eq.' + enc(token) + '&limit=1').then(r => (r && r[0]) || null),
 
-  insertOrder: (row) =>
-    sb('/purchase_orders', { method: 'POST', body: [row] }).then(r => (r && r[0]) || null),
+  // Si la migración 004 todavía no corrió, la columna confirm_until no existe y
+  // PostgREST rechaza el insert entero. Enviar órdenes de compra funcionaba
+  // antes de esa migración y debe seguir funcionando: se reintenta sin el campo.
+  // Una función nueva no puede romper una que ya andaba.
+  insertOrder: async (row) => {
+    try {
+      const r = await sb('/purchase_orders', { method: 'POST', body: [row] });
+      return (r && r[0]) || null;
+    } catch (e) {
+      const falta = /confirm_until/.test(e.message || '');
+      if (!falta) throw e;
+      console.warn('insertOrder: falta la migración 004, se guarda la orden sin confirm_until');
+      const { confirm_until, ...resto } = row;
+      const r = await sb('/purchase_orders', { method: 'POST', body: [resto] });
+      return (r && r[0]) || null;
+    }
+  },
 
   updateOrder: (id, patch) =>
     sb('/purchase_orders?id=eq.' + enc(id), { method: 'PATCH', body: patch }).then(r => (r && r[0]) || null),

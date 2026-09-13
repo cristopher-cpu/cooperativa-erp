@@ -22,13 +22,15 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
   const [form, setForm] = useState(null); // { familyId, type, productId, qty, note }
   const [guardando, setGuardando] = useState(false);
   const [formErr, setFormErr] = useState('');
+  const [faltaMigracion, setFaltaMigracion] = useState(false);
 
   useEffect(() => {
     if (!period) { setLoading(false); return; }
     let cancel = false;
     Promise.all([getAdjustments(period.id), getPurchaseOrders(period.id)]).then(([a, o]) => {
       if (cancel) return;
-      setAjustes(a); setOrdenes(o); setLoading(false);
+      setFaltaMigracion(a === null);
+      setAjustes(a || []); setOrdenes(o); setLoading(false);
     });
     return () => { cancel = true; };
   }, [period]);
@@ -60,7 +62,7 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
       setMsg({ tipo: 'err', texto: res.error });
     } else {
       const frescos = await getAdjustments(period.id);
-      setAjustes(frescos);
+      setAjustes(frescos || []);
       const n = Array.isArray(res) ? res.length : pendientes.length;
       setMsg({ tipo: 'ok', texto: 'Se aplicaron ' + n + ' faltante' + (n === 1 ? '' : 's') + ' desde lo que confirmaron los proveedores.' });
     }
@@ -145,6 +147,17 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
     );
   }
   if (loading) return <p style={{ color: '#888', fontSize: '13px' }}>Cargando ajustes...</p>;
+
+  if (faltaMigracion) {
+    return (
+      <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem' }}>
+        <p style={{ fontSize: '13px', fontWeight: 700, color: '#e65100', margin: '0 0 6px' }}>Falta ejecutar la migración</p>
+        <p style={{ fontSize: '12px', color: '#666', margin: 0, lineHeight: 1.6 }}>
+          La tabla de faltantes y extras todavía no existe en la base. Ejecuta <code>db/migrations/004_ajustes_pedido.sql</code> en Supabase (SQL Editor → Run without RLS) y vuelve a entrar aquí.
+        </p>
+      </div>
+    );
+  }
 
   const conPedido = families.filter(f => sealed[f.id]);
   const totalNoConf = ajustes.filter(a => a.type === 'no_confirmado').reduce((s, a) => s + a.amount, 0);

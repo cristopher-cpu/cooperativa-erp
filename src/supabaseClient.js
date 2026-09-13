@@ -485,7 +485,9 @@ export async function getAdjustments(periodId) {
     .select('*')
     .eq('period_id', periodId)
     .order('created_at', { ascending: false });
-  if (error) { console.error('getAdjustments error:', error.message); return []; }
+  // null (no []) cuando la tabla aún no existe: quien llama necesita poder
+  // distinguir "no hay ajustes" de "falta la migración 004".
+  if (error) { console.error('getAdjustments error:', error.message); return null; }
   return data || [];
 }
 

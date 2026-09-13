@@ -97,7 +97,7 @@ export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
       {/* Pendientes */}
       {pendientes.length > 0 && (
         <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1rem' }}>
-          <p style={{ fontSize: '12px', fontWeight: 700, color: '#e65100', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sin pedido ({pendientes.length})</p>
+          <p style={{ fontSize: '12px', fontWeight: 700, color: '#e65100', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pendientes por sellar ({pendientes.length})</p>
           {pendientes.map(f => (
             <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid #f0f7f0' }}>
               <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#bdbdbd', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700 }}>{f.initials}</div>
@@ -158,7 +158,7 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
                 <div>
                   <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
                   <p style={{ fontSize: '11px', color: '#888', margin: '2px 0 0' }}>
-                    {o ? `Sellado ${new Date(o.sealed_at).toLocaleString('es-CL')}` : 'Sin pedido'}
+                    {o ? `Sellado ${new Date(o.sealed_at).toLocaleString('es-CL')}` : 'Pendiente por sellar'}
                   </p>
                 </div>
               </div>
@@ -172,7 +172,7 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
                   </>
                 ) : (
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '6px', background: '#f5f5f5', color: '#999' }}>Pendiente</span>
+                    <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '6px', background: '#f5f5f5', color: '#999' }}>Pendiente por sellar</span>
                     {period?.active && (
                       <button onClick={() => onHacerPedido(f)}
                         style={{ fontSize: '10px', padding: '4px 10px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
@@ -226,7 +226,7 @@ export function AdminRetiros({ families, sealed, cargo, setSealed }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '1.5rem' }}>
-        {[{ l: 'Retirados', v: ret, c: '#2e7d32', bg: '#e8f5e9' }, { l: 'Pendientes', v: sc - ret, c: '#e65100', bg: '#fff3e0' }, { l: 'Sin pedido', v: families.length - sc, c: '#888', bg: '#f5f5f5' }].map(m => (
+        {[{ l: 'Retirados', v: ret, c: '#2e7d32', bg: '#e8f5e9' }, { l: 'Pendientes', v: sc - ret, c: '#e65100', bg: '#fff3e0' }, { l: 'Sin sellar', v: families.length - sc, c: '#888', bg: '#f5f5f5' }].map(m => (
           <div key={m.l} style={{ padding: '0.9rem', background: m.bg, borderRadius: '8px', textAlign: 'center' }}>
             <p style={{ fontSize: '10px', color: m.c, margin: 0, fontWeight: 600 }}>{m.l}</p>
             <p style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0 0', color: m.c }}>{m.v}</p>
