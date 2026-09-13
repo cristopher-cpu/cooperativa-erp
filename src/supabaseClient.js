@@ -532,3 +532,16 @@ export async function markOrderCharged(orderId, amount) {
   if (error) { console.error('markOrderCharged error:', error.message); return { error: error.message }; }
   return data;
 }
+
+// Histórico completo, para la analítica de cumplimiento de proveedores.
+export async function getAllPurchaseOrders() {
+  const { data, error } = await supabase.from('purchase_orders').select('*').order('created_at', { ascending: true });
+  if (error) { console.error('getAllPurchaseOrders error:', error.message); return []; }
+  return data || [];
+}
+
+export async function getAllAdjustments() {
+  const { data, error } = await supabase.from('order_adjustments').select('*').order('created_at', { ascending: true });
+  if (error) { console.error('getAllAdjustments error:', error.message); return []; }
+  return data || [];
+}

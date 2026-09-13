@@ -109,6 +109,7 @@ module.exports = async (req, res) => {
       provider_name: provider.name,
       token,
       status: 'enviada',
+      confirm_until: periodo.date_confirm_until || null,
       lines: lineas,
       total,
     });
@@ -122,6 +123,7 @@ module.exports = async (req, res) => {
       providerEmail: provider.email,
       isMember: !!provider.is_member,
       periodLabel: periodo.label,
+      fechaLimite: periodo.date_confirm_until || null,
       lines: lineas,
       total,
       linkConfirmar: link,

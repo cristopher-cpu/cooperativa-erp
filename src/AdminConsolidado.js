@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getPurchaseOrders, sendPurchaseOrder, deletePurchaseOrder } from './supabaseClient';
+import { ordenesVencidasSinConfirmar } from './calculos';
 
 // ─── CONSOLIDADO Y ÓRDENES DE COMPRA ─────────────────────────────────────────
 // Responde la pregunta que hasta ahora se hacía a mano: cuánto hay que comprarle
@@ -91,6 +92,10 @@ export function AdminConsolidado({ families, sealed, products, providers, period
   }, [sealed, products, providers, families]);
 
   const ordenDe = (providerId) => orders.find(o => o.provider_id === providerId) || null;
+
+  // Órdenes cuyo plazo venció sin respuesta. No generan ajustes: la cooperativa
+  // decidió asumir que quien no contesta sí trae todo.
+  const vencidas = useMemo(() => ordenesVencidasSinConfirmar(orders, period), [orders, period]);
 
   const totalGeneral = grupos.reduce((s, g) => s + g.total, 0);
   const enviadas = orders.filter(o => o.sent_at).length;
@@ -204,6 +209,30 @@ export function AdminConsolidado({ families, sealed, products, providers, period
           </p>
         </div>
       )}
+
+      {/* El plazo y, sobre todo, lo que pasa cuando vence. La cooperativa decidió
+          asumir que un proveedor que no contesta SÍ trae todo — un supuesto sobre
+          dinero que nadie ve escrito es el que después nadie recuerda haber tomado. */}
+      {period.date_confirm_until && (() => {
+        const limite = new Date(period.date_confirm_until + 'T23:59:59');
+        const vencido = new Date() > limite;
+        const txt = limite.toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' });
+        const mudas = vencidas.length;
+        return (
+          <div style={{ background: vencido && mudas ? '#fff3e0' : '#f1f8f1', border: `1px solid ${vencido && mudas ? '#ffb300' : '#a5d6a7'}`, borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem' }}>
+            <p style={{ fontSize: '12px', fontWeight: 700, color: vencido && mudas ? '#e65100' : '#2e7d32', margin: 0 }}>
+              📅 Plazo de confirmación: {txt}
+            </p>
+            <p style={{ fontSize: '11px', color: '#666', margin: '5px 0 0', lineHeight: 1.55 }}>
+              {!vencido
+                ? <>Los proveedores lo ven en su correo y en la página de confirmación. Si no responden a tiempo, <strong>se asume que traen el pedido completo</strong> y se cobra así a las familias.</>
+                : mudas === 0
+                  ? <>El plazo venció y <strong>todos los proveedores respondieron</strong>.</>
+                  : <><strong>{mudas} proveedor{mudas === 1 ? '' : 'es'} no respondió</strong> ({vencidas.map(o => o.provider_name).join(', ')}). Se asume que traen el pedido completo y se cobrará así. <strong>Insistirles por otro medio es tarea de la comisión</strong> — el sistema no lo hace solo.</>}
+            </p>
+          </div>
+        );
+      })()}
 
       {msg && (
         <div style={{ background: msg.tipo === 'ok' ? '#e8f5e9' : '#ffebee', border: `1px solid ${msg.tipo === 'ok' ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem', display: 'flex', alignItems: 'flex-start', gap: '9px' }}>

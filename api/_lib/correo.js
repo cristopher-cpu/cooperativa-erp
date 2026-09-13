@@ -19,7 +19,7 @@ const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-function plantillaOrden({ providerName, isMember, periodLabel, lines, total, linkConfirmar, esPrueba, destinoReal }) {
+function plantillaOrden({ providerName, isMember, periodLabel, lines, total, linkConfirmar, esPrueba, destinoReal, fechaLimite }) {
   const filas = lines.map(l => `
     <tr>
       <td style="padding:9px 10px;border-bottom:1px solid #eee;font-size:14px;color:#222">${esc(l.name)}</td>
@@ -33,9 +33,17 @@ function plantillaOrden({ providerName, isMember, periodLabel, lines, total, lin
     ? `Hola ${esc(providerName)}, ¿cómo estás?`
     : `Estimado proveedor ${esc(providerName)}:`;
 
+  const limiteTxt = fechaLimite
+    ? new Date(fechaLimite + 'T12:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })
+    : null;
+
   const cuerpo = isMember
-    ? 'Te dejamos el detalle de lo que la cooperativa necesita este período. Cuando puedas, confírmanos qué vas a tener disponible.'
-    : 'Junto con saludar, se adjunta el pedido a realizar. Agradeceremos confirmar la disponibilidad de los productos dentro de las próximas 24 horas.';
+    ? 'Te dejamos el detalle de lo que la cooperativa necesita este período. ' +
+      (limiteTxt ? 'Confírmanos qué vas a tener disponible <strong>antes del ' + esc(limiteTxt) + '</strong>.' : 'Cuando puedas, confírmanos qué vas a tener disponible.')
+    : 'Junto con saludar, se adjunta el pedido a realizar. ' +
+      (limiteTxt
+        ? 'Agradeceremos confirmar la disponibilidad de los productos <strong>antes del ' + esc(limiteTxt) + '</strong>.'
+        : 'Agradeceremos confirmar la disponibilidad de los productos dentro de las próximas 24 horas.');
 
   const avisoPrueba = esPrueba ? `
     <div style="background:#fff8e1;border:2px dashed #ffb300;border-radius:8px;padding:12px 14px;margin-bottom:18px">
@@ -88,6 +96,7 @@ function plantillaOrden({ providerName, isMember, periodLabel, lines, total, lin
           <p style="margin:12px 0 0;font-size:12px;color:#888;line-height:1.5">
             Se abre directo, sin usuario ni contraseña.<br>Podrás marcar producto por producto qué tienes disponible.
           </p>
+          ${limiteTxt ? '<div style="margin-top:16px;padding:11px 14px;background:#fff8e1;border:1px solid #ffe082;border-radius:8px"><p style="margin:0;font-size:13px;color:#e65100;font-weight:700">📅 Plazo para confirmar: ' + esc(limiteTxt) + '</p><p style="margin:5px 0 0;font-size:12px;color:#795548;line-height:1.5">Si no recibimos respuesta antes de esa fecha, <strong>asumiremos que traes el pedido completo</strong> y se le cobrará así a las familias.</p></div>' : ''}
         </div>
       </div>
 

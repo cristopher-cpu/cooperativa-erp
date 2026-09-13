@@ -93,6 +93,11 @@ alter table sealed_orders add column if not exists charged_at     timestamptz;
 alter table sealed_orders add column if not exists charged_amount integer;
 
 
+-- La orden guarda su propio plazo de confirmación: si mañana alguien mueve la
+-- fecha del período, la orden que el proveedor recibió debe seguir diciendo lo
+-- que decía cuando se envió.
+alter table purchase_orders add column if not exists confirm_until date;
+
 -- ── Verificación ────────────────────────────────────────────────────────────
 select
   (select count(*) from order_adjustments) as ajustes,

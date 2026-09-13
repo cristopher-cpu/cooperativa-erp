@@ -257,3 +257,104 @@ export function ventanaAjustes(period, ord, ahora = new Date()) {
 export function puedeBorrarAjuste(adj, ventana) {
   return !!(adj && adj.source === 'familia' && ventana && ventana.abierta);
 }
+
+// ── Cumplimiento de proveedores ─────────────────────────────────────────────
+//
+// Dos cosas distintas, y conviene no confundirlas:
+//
+//   PUNTUALIDAD  ¿contestó la orden de compra, y antes de la fecha límite?
+//                Es cortesía y orden administrativo.
+//
+//   PALABRA      de lo que dijo que traía, ¿cuánto llegó de verdad?
+//                Es lo que de verdad le cuesta plata y trabajo a la cooperativa:
+//                un proveedor que confirma todo y después no aparece hace más
+//                daño que uno que avisa a tiempo que no tiene.
+//
+// La segunda se mide cruzando lo confirmado con los faltantes registrados en el
+// retiro sobre productos de ese proveedor. Un faltante después de haber
+// confirmado disponibilidad es exactamente una promesa incumplida.
+export function metricasProveedores({ providers = [], purchaseOrders = [], adjustments = [], products = [], periods = [] }) {
+  const limitePorPeriodo = new Map(periods.map(p => [p.id, p.date_confirm_until || null]));
+  const proveedorDeProducto = new Map(products.map(p => [p.id, p.provider_id]));
+
+  // Faltantes del retiro (no los que el propio proveedor avisó) agrupados por
+  // proveedor y período: son las promesas que no se cumplieron.
+  const faltantesPorProv = new Map();
+  adjustments.filter(a => a.type === 'faltante').forEach(a => {
+    const pid = proveedorDeProducto.get(a.product_id);
+    if (!pid) return;
+    const k = pid + '|' + a.period_id;
+    faltantesPorProv.set(k, (faltantesPorProv.get(k) || 0) + Math.abs(Number(a.amount) || 0));
+  });
+
+  const filas = providers.map(pv => {
+    const ordenes = purchaseOrders.filter(o => o.provider_id === pv.id && o.sent_at);
+    const confirmadas = ordenes.filter(o => o.status === 'confirmada' && o.confirmed_at);
+
+    let aTiempo = 0, conLimite = 0, sumaHoras = 0, conHoras = 0;
+    confirmadas.forEach(o => {
+      const enviado = new Date(o.sent_at);
+      const confirmado = new Date(o.confirmed_at);
+      if (!isNaN(enviado) && !isNaN(confirmado)) {
+        sumaHoras += (confirmado - enviado) / 36e5;
+        conHoras++;
+      }
+      const lim = limitePorPeriodo.get(o.period_id);
+      if (lim) {
+        conLimite++;
+        if (confirmado <= new Date(lim + 'T23:59:59')) aTiempo++;
+      }
+    });
+
+    // Valor confirmado como disponible: la base contra la que se mide la palabra.
+    let valorConfirmado = 0;
+    confirmadas.forEach(o => {
+      (o.lines || []).forEach(l => {
+        const q = l.confirmed_qty != null ? Number(l.confirmed_qty) : (l.available === false ? 0 : Number(l.qty));
+        valorConfirmado += Math.round((q || 0) * (Number(l.price) || 0));
+      });
+    });
+
+    let faltoTrasConfirmar = 0;
+    confirmadas.forEach(o => { faltoTrasConfirmar += faltantesPorProv.get(pv.id + '|' + o.period_id) || 0; });
+
+    const pctConfirma = ordenes.length ? Math.round(confirmadas.length / ordenes.length * 100) : null;
+    const pctATiempo = conLimite ? Math.round(aTiempo / conLimite * 100) : null;
+    const pctPalabra = valorConfirmado > 0
+      ? Math.max(0, Math.round((1 - faltoTrasConfirmar / valorConfirmado) * 100))
+      : null;
+
+    return {
+      id: pv.id,
+      name: pv.name,
+      is_member: !!pv.is_member,
+      enviadas: ordenes.length,
+      confirmadas: confirmadas.length,
+      sinResponder: ordenes.length - confirmadas.length,
+      pctConfirma,
+      aTiempo,
+      conLimite,
+      pctATiempo,
+      horasPromedio: conHoras ? Math.round(sumaHoras / conHoras * 10) / 10 : null,
+      valorConfirmado,
+      faltoTrasConfirmar,
+      pctPalabra,
+    };
+  });
+
+  return filas.filter(f => f.enviadas > 0).sort((a, b) => b.enviadas - a.enviadas);
+}
+
+// Órdenes cuyo plazo venció sin respuesta.
+//
+// Decisión de la cooperativa: si nadie contesta, se ASUME QUE TRAE TODO y se
+// cobra completo. Insistirle al proveedor por otros medios es trabajo de la
+// comisión, no del sistema. Esta función no genera ajustes — solo saca a la luz
+// el supuesto, porque un supuesto sobre dinero que nadie ve escrito es el que
+// después nadie recuerda haber tomado.
+export function ordenesVencidasSinConfirmar(purchaseOrders = [], period, ahora = new Date()) {
+  if (!period || !period.date_confirm_until) return [];
+  const limite = new Date(period.date_confirm_until + 'T23:59:59');
+  if (ahora <= limite) return [];
+  return purchaseOrders.filter(o => o.sent_at && o.status !== 'confirmada');
+}

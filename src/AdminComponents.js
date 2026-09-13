@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged } from './supabaseClient';
-import { cuentaDeFamilia, ajustesPorFamilia } from './calculos';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRole, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders } from './supabaseClient';
+import { cuentaDeFamilia, ajustesPorFamilia, metricasProveedores } from './calculos';
+import { CumplimientoProveedores } from './CumplimientoProveedores';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
@@ -1637,6 +1638,19 @@ function RankingCard({ title, subtitle, icon, color, accentBg, rows, emptyMsg })
 }
 
 export function AdminAnalytics({ families = [], products = [] }) {
+  const [cumplimiento, setCumplimiento] = useState(null);
+
+  // Cumplimiento de proveedores: se calcula sobre TODO el histórico, no solo el
+  // período activo — un proveedor se juzga por su costumbre, no por un mes.
+  useEffect(() => {
+    let cancel = false;
+    Promise.all([getProviders(), getAllPurchaseOrders(), getAllAdjustments(), getAllPeriods()])
+      .then(([provs, pos, adjs, pers]) => {
+        if (cancel) return;
+        setCumplimiento(metricasProveedores({ providers: provs, purchaseOrders: pos, adjustments: adjs, products, periods: pers }));
+      });
+    return () => { cancel = true; };
+  }, [products]);
   const [granularity, setGranularity] = useState('mes');
   const [selectedBucket, setSelectedBucket] = useState('all');
   const [allOrders, setAllOrders] = useState([]);
@@ -2040,6 +2054,11 @@ export function AdminAnalytics({ families = [], products = [] }) {
         <RankingCard icon="🥇" title="Top productos por valor" subtitle="Cuánto dinero genera cada producto" color="#2e7d32" accentBg="#f1f8f1" rows={topProdValue} />
         <RankingCard icon="📦" title="Top productos por cantidad" subtitle="Los más pedidos en unidades" color="#1565c0" accentBg="#eef5fc" rows={topProdQty} />
         <RankingCard icon="🏭" title="Top proveedores" subtitle="Por valor total solicitado" color="#6a1b9a" accentBg="#f7f0fa" rows={topProv} />
+      </div>
+
+      <CumplimientoProveedores filas={cumplimiento} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
         <RankingCard icon="🏷️" title="Top categorías" subtitle="Por valor total" color="#00838f" accentBg="#e9f8fa" rows={topCat} />
         <RankingCard icon="🛒" title="Familias que más compran" subtitle="Por valor total de pedidos" color="#e65100" accentBg="#fdf3ea" rows={topFam} />
         <RankingCard icon="⚠️" title="Familias con más saldo pendiente" subtitle="Saldo pendiente actual" color="#c62828" accentBg="#fdeeee" rows={debtRank} emptyMsg="Ninguna familia tiene saldo pendiente 🎉" />

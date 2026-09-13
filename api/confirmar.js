@@ -56,6 +56,7 @@ const shell = (titulo, contenido) => `<!doctype html>
   .msg p{font-size:14px;color:#666;margin:0;line-height:1.6}
   .badge{display:inline-block;font-size:11px;font-weight:700;padding:4px 11px;border-radius:11px;background:#e8f5e9;color:#2e7d32;margin-top:12px}
   .aviso{background:#fff8e1;border:2px dashed #ffb300;border-radius:8px;padding:11px 13px;margin-bottom:16px;font-size:12px;color:#e65100;font-weight:600}
+  .plazo{background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:11px 14px;margin-bottom:18px}
 </style></head><body><div class="wrap">${contenido}</div></body></html>`;
 
 const pantallaSimple = (emoji, titulo, texto) => shell(titulo, `
@@ -96,6 +97,10 @@ function pantallaOrden(o) {
     <div class="body">
       ${o.is_test ? '<div class="aviso">⚠ Esta es una orden de PRUEBA del sistema, no un pedido real.</div>' : ''}
       <p class="intro">Marca para cada producto si podrás entregarlo completo, solo una parte, o si no lo tienes disponible. Al terminar, presiona el botón del final.</p>
+      ${o.confirm_until ? `<div class="plazo">
+        <p style="margin:0;font-size:13px;color:#e65100;font-weight:700">📅 Plazo para confirmar: ${esc(new Date(o.confirm_until + 'T12:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' }))}</p>
+        <p style="margin:5px 0 0;font-size:12px;color:#795548;line-height:1.5">Si no recibimos tu respuesta antes de esa fecha, <strong>asumiremos que traes el pedido completo</strong> y se le cobrará así a las familias.</p>
+      </div>` : ''}
       <form method="POST" action="?token=${encodeURIComponent(o.token)}">
         ${lineas}
         <div class="total"><span>Total del pedido</span><span>${clp(o.total)}</span></div>
