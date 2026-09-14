@@ -559,16 +559,38 @@ export async function addAdjustment(adj) {
 }
 
 // Varios de una vez (la confirmación del proveedor genera uno por familia).
-// ignoreDuplicates deja pasar los que ya existían sin romper el resto: reenviar
-// una orden de compra no debe duplicar descuentos.
+//
+// No se usa upsert a propósito. El índice que protege contra descuentos
+// duplicados es PARCIAL —solo cubre los 'no_confirmado', porque una familia sí
+// puede tener un faltante y un extra del mismo producto— y Postgres exige
+// repetir ese WHERE en el ON CONFLICT, cosa que PostgREST no sabe mandar.
+// Pedirlo devuelve "there is no unique or exclusion constraint matching the
+// ON CONFLICT specification".
+//
+// Quien llama ya filtra los que existen, así que el insert directo basta. El
+// índice queda de última barrera para dos personas aplicando a la vez: si
+// choca, se reintenta uno por uno y los repetidos simplemente se saltan.
 export async function addAdjustmentsBulk(adjs) {
   if (!adjs.length) return [];
-  const { data, error } = await supabase
-    .from('order_adjustments')
-    .upsert(adjs, { onConflict: 'period_id,family_id,product_id', ignoreDuplicates: true })
-    .select();
-  if (error) { console.error('addAdjustmentsBulk error:', error.message); return { error: error.message }; }
-  return data || [];
+
+  const { data, error } = await supabase.from('order_adjustments').insert(adjs).select();
+  if (!error) return data || [];
+
+  const duplicado = e => e && (e.code === '23505' || /duplicate key|already exists/i.test(e.message || ''));
+  if (!duplicado(error)) {
+    console.error('addAdjustmentsBulk error:', error.message);
+    return { error: error.message };
+  }
+
+  const guardados = [];
+  for (const a of adjs) {
+    const r = await supabase.from('order_adjustments').insert([a]).select().single();
+    if (!r.error) { guardados.push(r.data); continue; }
+    if (duplicado(r.error)) continue;  // ya lo aplicó alguien más
+    console.error('addAdjustmentsBulk error:', r.error.message);
+    return { error: r.error.message };
+  }
+  return guardados;
 }
 
 export async function updateAdjustment(id, updates) {

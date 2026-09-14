@@ -229,7 +229,7 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
               return (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px', borderBottom: '1px solid #f5f5f5' }}>
                   <span style={{ color: '#444' }}>{(fam && fam.name) || p.family_id} · {p.product_name} <span style={{ color: '#aaa' }}>×{p.qty}</span></span>
-                  <span style={{ fontWeight: 600, color: '#c62828' }}>{clp(p.amount)}</span>
+                  <span style={{ fontWeight: 600, color: '#c62828', whiteSpace: 'nowrap' }}>− {clp(Math.abs(p.amount))}</span>
                 </div>
               );
             })}
@@ -237,7 +237,9 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
           </div>
           <button onClick={aplicarDeProveedores} disabled={aplicando}
             style={{ width: '100%', padding: '10px', background: '#e65100', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
-            {aplicando ? 'Aplicando...' : 'Aplicar los ' + pendientes.length + ' faltantes'}
+            {aplicando ? 'Aplicando...'
+              : pendientes.length === 1 ? 'Aplicar el faltante'
+              : 'Aplicar los ' + pendientes.length + ' faltantes'}
           </button>
         </div>
       )}
