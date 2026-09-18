@@ -17,6 +17,7 @@ const {
   getSealedOrdersForPeriod, getProductsOfProvider, getPeriod,
 } = require('./_lib/db');
 const { enviarOrden } = require('./_lib/correo');
+const { delRequest } = require('./_lib/sesion');
 
 function baseUrl(req) {
   // VERCEL_URL no incluye el esquema y en local no existe.
@@ -130,6 +131,23 @@ module.exports = async (req, res) => {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const { periodId, providerId } = body;
+
+    // ── Quién puede disparar una orden de compra ────────────────────────────
+    //
+    // Esto manda un correo REAL a un proveedor de la cooperativa. Sin sesión,
+    // cualquiera que conociera la URL podía hacer que la cooperativa le pidiera
+    // mercadería a un proveedor, quemar la cuota de Brevo, o simplemente
+    // hacerle perder el tiempo a trece personas.
+    //
+    // Es de la Comisión Proveedores, que es quien tiene ese botón en el panel.
+    const sesion = delRequest(req);
+    if (!sesion) {
+      return res.status(401).json({ error: 'Sesión no válida o vencida. Vuelve a entrar y reinténtalo.' });
+    }
+    const roles = Array.isArray(sesion.roles) ? sesion.roles : [];
+    if (!roles.includes('admin') && !roles.includes('proveedores')) {
+      return res.status(403).json({ error: 'Solo la Comisión Proveedores puede enviar órdenes de compra.' });
+    }
 
     if (!periodId) return res.status(400).json({ error: 'Falta el período' });
     if (!providerId) return res.status(400).json({ error: 'Falta el proveedor' });

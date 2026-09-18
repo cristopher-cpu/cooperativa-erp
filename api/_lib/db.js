@@ -3,12 +3,31 @@
 // Deliberadamente NO usamos @supabase/supabase-js aquí: la librería completa
 // alarga el arranque en frío de la función y solo necesitamos cuatro consultas.
 //
-// La clave es la anónima, la misma que ya viaja en el bundle del navegador. No
-// es un secreto y no se gana nada ocultándola; el secreto real de este flujo es
-// el token de cada orden.
+// ── Qué clave usa, y por qué cambió ─────────────────────────────────────────
+//
+// Antes usaba la clave pública, la misma del bundle, y estaba bien: con RLS
+// apagado daba acceso total de todos modos, y el secreto real del flujo de
+// proveedores era el token de cada orden.
+//
+// Con RLS encendido (migración 010) esa clave ya no puede leer nada, y el
+// servidor necesita hacer cosas que ninguna política debería permitirle a un
+// usuario: verificar un PIN contra `pin_hash`, armar la lista de la pantalla de
+// ingreso antes de que nadie haya entrado, y reconstruir una orden de compra.
+// Para eso está `SUPABASE_SERVICE_ROLE_KEY`, que se salta RLS.
+//
+// **Sin prefijo REACT_APP_.** Ese prefijo la incrustaría en el JavaScript
+// público, y con la clave de servicio en el bundle RLS dejaría de servir para
+// nada — sería peor que no haberlo encendido, porque parecería protegido.
+//
+// Si la variable no está, se cae a la clave pública: así todo sigue funcionando
+// mientras RLS siga apagado, y el día que se enciende sin haber configurado la
+// variable el error es inmediato y visible en /api/estado, no silencioso.
 
 const SUPABASE_URL = 'https://fihovunxkkkwaqsggcri.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_tElx3P7KYXfYsqzsn2R7_g_lWT0yulK';
+
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+const KEY = SERVICE_KEY || SUPABASE_ANON_KEY;
 
 const REST = SUPABASE_URL + '/rest/v1';
 
@@ -17,8 +36,8 @@ async function sb(path, options) {
   const res = await fetch(REST + path, {
     method: opts.method || 'GET',
     headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+      apikey: KEY,
+      Authorization: 'Bearer ' + KEY,
       'Content-Type': 'application/json',
       Prefer: opts.prefer || 'return=representation',
     },
@@ -41,6 +60,9 @@ const enc = encodeURIComponent;
 
 module.exports = {
   sb,
+
+  // Para que /api/estado pueda avisar si falta la clave sin revelarla.
+  hayServiceKey: () => !!SERVICE_KEY,
 
   getOrderByToken: (token) =>
     sb('/purchase_orders?select=*&token=eq.' + enc(token) + '&limit=1').then(r => (r && r[0]) || null),

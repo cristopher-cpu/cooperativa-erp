@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, getBajas, addBaja, deleteBaja, unmarkRetired, copyChargesToPeriod } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, asignarBodegaConCargo, borrarAsignacionConReverso, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, getBajas, addBaja, deleteBaja, unmarkRetired, copyChargesToPeriod } from './supabaseClient';
 import {
   cuentaDeFamilia, ajustesPorFamilia, metricasProveedores, estadoPedidos,
   estadoConfirmacionPorProducto, ESTADOS_CONFIRMACION, parseItems, clp,
@@ -1048,9 +1048,39 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-        <p style={{ fontSize: '13px', fontWeight: 500, color: '#666', margin: 0 }}>{fams.length} familias · {admins.length} admins</p>
+        <p style={{ fontSize: '13px', fontWeight: 500, color: '#666', margin: 0 }}>{fams.length} familias · {admins.length} con comisión</p>
         {!showForm && <button onClick={() => setShowForm(true)} style={{ padding: '6px 14px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>+ Nuevo miembro</button>}
       </div>
+
+      {/* Quién tiene acceso al panel y no puede entrar.
+          /api/login exige PIN a toda cuenta que vea el panel —no solo a las
+          administradoras— porque una socia con Balance Contable ve saldos y
+          flujo de caja de toda la cooperativa. Sin este aviso, el día que se
+          despliega ese control media comisión descubre que no puede entrar y
+          nadie sabe por qué. */}
+      {(() => {
+        const sinPin = admins.filter(f => !f.pin_set_at);
+        if (!sinPin.length) return null;
+        return (
+          <div style={{ background: '#ffebee', border: '1.5px solid #ef9a9a', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
+            <p style={{ fontSize: '13px', fontWeight: 700, color: '#c62828', margin: '0 0 6px' }}>
+              🔒 {sinPin.length} cuenta{sinPin.length === 1 ? '' : 's'} con acceso al panel y sin PIN — no puede{sinPin.length === 1 ? '' : 'n'} entrar
+            </p>
+            <p style={{ fontSize: '12px', color: '#666', margin: '0 0 9px', lineHeight: 1.6 }}>
+              Una cuenta que ve saldos y flujo de caja de toda la cooperativa no entra sin credencial.
+              Asígnale un PIN a cada una con el botón <strong>🔒</strong> de su fila; hasta entonces pueden
+              hacer pedidos, pero no abrir el panel.
+            </p>
+            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+              {sinPin.map(f => (
+                <span key={f.id} style={{ fontSize: '11px', fontWeight: 600, padding: '3px 9px', borderRadius: '10px', background: 'white', color: '#c62828', border: '1px solid #ffcdd2' }}>
+                  {f.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       <input type="text" placeholder="Buscar familia por nombre..." value={srch} onChange={e => setSrch(e.target.value)}
         style={{ width: '100%', padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box', marginBottom: '1rem' }} />
@@ -2674,28 +2704,26 @@ export function AdminBodega({ period, families, setFamilies, products = [], curr
       total_value: totalValue,
       period_id: period.id,
     };
-    const result = await addBodegaAssignment(asnData);
-    if (result) {
-      setAssignments(p => [result, ...p]);
-      const newBal = (fam.balance || 0) - totalValue;
-      await updateFamilyBalance(fam.id, newBal);
-      setFamilies(p => p.map(f => f.id === fam.id ? { ...f, balance: newBal } : f));
-      setAssigningItem(null);
-      setAssignForm({ family_id: '', quantity: '' });
-      setAssignErr('');
-    } else { setAssignErr('Error al asignar'); }
+    // El cargo al saldo lo aplica la base (trigger de la migración 010). Antes
+    // se leía el saldo, se restaba y se sobrescribía desde acá: dos personas
+    // asignando a la vez perdían un cargo sin aviso.
+    const res = await asignarBodegaConCargo(asnData, fam.balance || 0);
+    if (res.error) { setAssignErr(res.error); setAssignSaving(false); return; }
+    setAssignments(p => [res.asignacion, ...p]);
+    setFamilies(p => p.map(f => f.id === fam.id ? { ...f, balance: res.balance } : f));
+    setAssigningItem(null);
+    setAssignForm({ family_id: '', quantity: '' });
+    setAssignErr(res.aviso || '');
     setAssignSaving(false);
   };
 
   const handleDeleteAssignment = async (asn) => {
-    await deleteBodegaAssignment(asn.id);
-    setAssignments(p => p.filter(a => a.id !== asn.id));
     const fam = families.find(f => f.id === asn.family_id);
-    if (fam) {
-      const newBal = (fam.balance || 0) + asn.total_value;
-      await updateFamilyBalance(fam.id, newBal);
-      setFamilies(p => p.map(f => f.id === asn.family_id ? { ...f, balance: newBal } : f));
-    }
+    const res = await borrarAsignacionConReverso(asn, fam ? (fam.balance || 0) : 0);
+    if (res.error) { setAssignErr(res.error); return; }
+    setAssignments(p => p.filter(a => a.id !== asn.id));
+    if (fam) setFamilies(p => p.map(f => f.id === asn.family_id ? { ...f, balance: res.balance } : f));
+    if (res.aviso) setAssignErr(res.aviso);
   };
 
   const totalBodegaValue = items.reduce((s, i) => s + parseInt(i.price) * parseFloat(i.quantity), 0);

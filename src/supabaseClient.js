@@ -3,7 +3,125 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = "https://fihovunxkkkwaqsggcri.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_tElx3P7KYXfYsqzsn2R7_g_lWT0yulK";
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// ─── SESIÓN ──────────────────────────────────────────────────────────────────
+//
+// `/api/login` verifica el PIN y devuelve un token firmado con el secreto JWT
+// del proyecto. Desde ese momento cada consulta lo lleva, y las políticas RLS
+// leen de él quién es y qué perfiles tiene. Sin token, la base no devuelve nada.
+//
+// ── Por qué el token vive solo en memoria ───────────────────────────────────
+//
+// No se guarda en localStorage ni en sessionStorage. Dos razones:
+//
+//   1. Un token en localStorage sobrevive al cierre del navegador, y varias
+//      socias usan el computador de la casa o del centro comunitario. La sesión
+//      de una no debe seguir abierta para la siguiente persona que se siente.
+//   2. Es la única forma de que un XSS no se lo pueda llevar para usarlo después.
+//
+// El costo es que recargar la página obliga a entrar de nuevo — que es
+// exactamente lo que ya pasaba antes de esta capa, porque el usuario vivía en el
+// estado de React. No se pierde nada que se tuviera.
+//
+// ── Por qué se inyecta con un fetch propio ──────────────────────────────────
+//
+// `supabase.auth.setSession()` espera un par de tokens emitidos por Supabase
+// Auth y un refresh token que acá no existe. Envolver `fetch` es la forma
+// directa de poner el encabezado: el cliente se crea una sola vez y el token
+// puede cambiar después sin reconstruirlo.
+
+let sesionToken = null;
+
+// Si Supabase RECHAZA el token —no si lo acepta y las políticas niegan, eso es
+// un 403— el problema es la firma, y hay un solo motivo probable: el proyecto
+// no usa el secreto simétrico con que /api/login está firmando. Algunos
+// proyectos nuevos firman con claves asimétricas y el secreto HS256 ya no vale.
+//
+// Se guarda acá para que la interfaz lo pueda decir con nombre. Sin esto el
+// síntoma es que nada carga y no hay ninguna pista de por qué.
+let tokenRechazado = null;
+export const getTokenRechazado = () => tokenRechazado;
+
+export function setSesion(token) { sesionToken = token || null; tokenRechazado = null; }
+export function cerrarSesion() { sesionToken = null; tokenRechazado = null; }
+export const haySesion = () => !!sesionToken;
+
+// Cuando hay sesión se manda el token del usuario; cuando no, la clave pública.
+// `apikey` va siempre: Supabase la exige para enrutar el proyecto, y con RLS
+// encendido por sí sola no autoriza nada.
+const fetchConSesion = async (input, init = {}) => {
+  const headers = new Headers(init.headers || {});
+  headers.set('apikey', SUPABASE_ANON_KEY);
+  headers.set('Authorization', 'Bearer ' + (sesionToken || SUPABASE_ANON_KEY));
+  const res = await fetch(input, { ...init, headers });
+
+  if (res.status === 401 && sesionToken) {
+    const copia = res.clone();
+    let msg = '';
+    try { msg = (await copia.json()).message || ''; } catch { /* sin cuerpo JSON */ }
+    if (/jwt|token|signature|expired/i.test(msg) || !msg) {
+      tokenRechazado = /expired/i.test(msg)
+        ? 'La sesión venció. Vuelve a entrar.'
+        : 'Supabase rechazó la sesión firmada (' + (msg || 'JWT inválido') + '). ' +
+          'Lo más probable es que SUPABASE_JWT_SECRET no coincida con el secreto del proyecto, ' +
+          'o que el proyecto firme con claves asimétricas y no con el secreto HS256.';
+      console.error('supabase:', tokenRechazado);
+    }
+  }
+  return res;
+};
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    // No hay usuarios de Supabase Auth en este proyecto: la sesión la emite
+    // /api/login. Sin esto, la librería intentaría refrescar una sesión que no
+    // existe y escribiría en localStorage.
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+  global: { fetch: fetchConSesion },
+});
+
+// ─── PANTALLA DE INGRESO ─────────────────────────────────────────────────────
+//
+// Antes de entrar no hay sesión, así que con RLS encendido el navegador no puede
+// leer `families`. Pero para entrar hay que poder elegir su nombre de una lista.
+// `/api/portada` resuelve ese huevo-y-gallina devolviendo solo nombres,
+// iniciales y si cada uno tiene PIN — ni correos, ni saldos.
+//
+// En local (`npm start`) no hay funciones serverless: se cae a leer la base
+// directo, que es lo que se podía hacer antes. Sin eso no habría manera de
+// trabajar en el proyecto.
+export async function getPortada() {
+  try {
+    const res = await fetch('/api/portada');
+    if (res.ok) {
+      const d = await res.json();
+      return {
+        // `tienePin` es el nombre honesto de lo que devuelve el servidor (un
+        // booleano, no la fecha). Se expone también como `pin_set_at` porque es
+        // lo que la pantalla de ingreso ya consulta, y su fecha exacta no le
+        // hace falta a nadie ahí.
+        familias: (d.familias || []).map(f => ({ ...f, pin_set_at: f.tienePin ? true : null })),
+        period: d.period || null,
+      };
+    }
+    if (res.status !== 404) {
+      console.error('getPortada: HTTP', res.status);
+      return { familias: [], period: null, error: 'No se pudo cargar la pantalla de ingreso.' };
+    }
+  } catch (e) {
+    if (!EN_LOCAL) {
+      console.error('getPortada:', e.message);
+      return { familias: [], period: null, error: 'No se pudo cargar la pantalla de ingreso.' };
+    }
+  }
+
+  // Respaldo local: sin /api, se lee la base como antes.
+  console.warn('getPortada: sin /api/portada (¿npm start?), leyendo la base directamente');
+  const [familias, period] = await Promise.all([getFamilies(), getPeriod()]);
+  return { familias, period, local: true };
+}
 
 // Columnas explícitas, nunca select('*'). Con '*' viajaban `pin` (texto plano) y
 // `pin_hash` al navegador de cualquiera que abriera el sitio. Para saber si una
@@ -78,6 +196,11 @@ export async function loginFamily(familyId, pin) {
         necesitaPin: body && body.necesitaPin,
       };
     }
+    // Desde acá, cada consulta a la base va firmada como esta familia. Se
+    // guarda antes de devolver: si el componente hiciera una consulta al
+    // renderizar, ya tiene que ir identificada.
+    if (body && body.token) setSesion(body.token);
+
     return body || { error: 'Respuesta vacía del servidor' };
   } catch (e) {
     if (EN_LOCAL) {
@@ -89,11 +212,18 @@ export async function loginFamily(familyId, pin) {
 }
 
 // Cifrar exige el servidor, así que el panel no escribe la columna directamente.
+//
+// Manda la sesión: `/api/set-pin` usa la clave de servicio y se salta RLS, así
+// que tiene que comprobar quién llama. Solo Administración puede cambiarle el
+// PIN a otra familia; cada una puede cambiar el suyo.
 export async function setFamilyPin(familyId, pin) {
   try {
     const res = await fetch('/api/set-pin', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sesionToken ? { Authorization: 'Bearer ' + sesionToken } : {}),
+      },
       body: JSON.stringify({ familyId, pin: pin || null }),
     });
     const text = await res.text();
@@ -485,7 +615,10 @@ export async function sendPurchaseOrder(payload) {
   try {
     const res = await fetch('/api/enviar-orden', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sesionToken ? { Authorization: 'Bearer ' + sesionToken } : {}),
+      },
       body: JSON.stringify(payload),
     });
     const text = await res.text();
@@ -914,4 +1047,68 @@ export async function getAllBajas() {
   const { data, error } = await supabase.from('bodega_bajas').select('*').order('created_at', { ascending: true });
   if (error) { console.error('getAllBajas error:', error.message); return []; }
   return data || [];
+}
+
+// ─── RESERVAS DE BODEGA: EL SALDO LO MUEVE LA BASE ───────────────────────────
+//
+// Asignar stock de bodega a una familia le carga el monto a su saldo. Ese cargo
+// lo escribía el navegador —leía el saldo, restaba, sobrescribía— y con RLS
+// encendido una familia ya no puede escribir su propio saldo, así que esa vía
+// quedó cerrada. La migración 010 pone un trigger que lo hace en la base, que
+// además es atómico: dos personas asignando a la vez ya no pierden un cargo.
+//
+// Estas dos funciones se adaptan solas: insertan (o borran), vuelven a leer el
+// saldo y, si no se movió, aplican el cargo como antes. Así funcionan con la
+// migración 010 corrida o sin ella, y nunca cobran dos veces.
+//
+// El precio es una lectura extra por asignación. A cambio, no hay una versión
+// del código que solo funcione después de correr un SQL a mano.
+
+async function saldoActual(familyId) {
+  const { data, error } = await supabase.from('families').select('balance').eq('id', familyId).single();
+  if (error) { console.error('saldoActual error:', error.message); return null; }
+  return data ? Number(data.balance) || 0 : null;
+}
+
+export async function asignarBodegaConCargo(assignment, saldoAntes) {
+  const creada = await addBodegaAssignment(assignment);
+  if (!creada) return { error: 'No se pudo asignar. Revisa la conexión e intenta de nuevo.' };
+
+  const esperado = (Number(saldoAntes) || 0) - (Number(assignment.total_value) || 0);
+  const despues = await saldoActual(assignment.family_id);
+
+  if (despues === null) return { asignacion: creada, balance: esperado, sinConfirmar: true };
+  if (despues === esperado) return { asignacion: creada, balance: despues, porTrigger: true };
+
+  // El trigger no está (falta la migración 010): se aplica como antes.
+  const r = await updateFamilyBalance(assignment.family_id, esperado);
+  if (!r) {
+    // Ni trigger ni permiso para escribir. La asignación quedó y el saldo no:
+    // hay que decirlo, porque el descalce es de plata.
+    return {
+      asignacion: creada, balance: despues,
+      aviso: 'Se asignó el stock, pero el saldo no se pudo actualizar. Corrígelo en Saldos y ejecuta db/migrations/010_rls_y_sesiones.sql.',
+    };
+  }
+  return { asignacion: creada, balance: esperado };
+}
+
+export async function borrarAsignacionConReverso(asn, saldoAntes) {
+  const ok = await deleteBodegaAssignment(asn.id);
+  if (!ok) return { error: 'No se pudo eliminar la asignación.' };
+
+  const esperado = (Number(saldoAntes) || 0) + (Number(asn.total_value) || 0);
+  const despues = await saldoActual(asn.family_id);
+
+  if (despues === null) return { balance: esperado, sinConfirmar: true };
+  if (despues === esperado) return { balance: despues, porTrigger: true };
+
+  const r = await updateFamilyBalance(asn.family_id, esperado);
+  if (!r) {
+    return {
+      balance: despues,
+      aviso: 'Se eliminó la asignación, pero el saldo no se pudo devolver. Corrígelo en Saldos.',
+    };
+  }
+  return { balance: esperado };
 }

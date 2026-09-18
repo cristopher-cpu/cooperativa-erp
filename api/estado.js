@@ -5,6 +5,8 @@
 // verdad al proveedor. No expone la clave, solo si existe.
 
 const { CORREO_PRUEBAS, REMITENTE } = require('./_lib/correo');
+const { haySecreto } = require('./_lib/sesion');
+const { hayServiceKey } = require('./_lib/db');
 
 // Este endpoint es público: no exponemos direcciones completas para no
 // regalárselas a un recolector de correos que pase por aquí.
@@ -24,5 +26,13 @@ module.exports = async (req, res) => {
     remitente: enmascarar(REMITENTE.email),
     remitenteNombre: REMITENTE.name,
     brevoConfigurado: !!process.env.BREVO_API_KEY,
+
+    // Si RLS ya está encendido y falta una de estas dos, el síntoma es una
+    // pantalla vacía sin explicación. Decir cuál falta es la diferencia entre
+    // diez minutos y una tarde. Se publica solo el booleano, nunca el valor:
+    // con el secreto JWT cualquiera se emite un token de administrador, y con la
+    // clave de servicio RLS deja de servir para nada.
+    sesionFirmada: haySecreto(),
+    claveDeServicio: hayServiceKey(),
   });
 };

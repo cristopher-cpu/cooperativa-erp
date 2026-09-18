@@ -5,14 +5,34 @@
 // la columna directamente. También borra la columna `pin` de texto plano, que
 // queda en el esquema solo como resto de la versión anterior.
 //
-// Advertencia honesta: este endpoint no verifica QUIÉN llama, porque la
-// aplicación todavía no tiene sesiones. Mientras RLS siga apagado eso da igual —
-// quien quisiera abusar puede escribir directo a la base de todos modos. Cuando
-// exista autenticación real, aquí va la comprobación de que el que llama es
-// administrador.
+// ── Quién puede llamar (antes: cualquiera) ──────────────────────────────────
+//
+// Hasta la sesión firmada, este endpoint no verificaba nada, y la advertencia
+// que había acá decía que daba igual porque con RLS apagado se podía escribir
+// directo a la base de todos modos. **Eso dejó de ser cierto en dos sentidos y
+// los dos empeoran el riesgo:**
+//
+//   · Con RLS encendido, escribir directo a la base ya no se puede — pero esta
+//     función sí puede, porque usa la clave de servicio. Se convertiría en la
+//     única puerta abierta, y en la peor: quien pudiera llamarla se asignaría el
+//     PIN de una administradora y entraría como ella.
+//   · El PIN es ahora la credencial de verdad, no una formalidad.
+//
+// Reglas: hace falta sesión firmada, y solo **Administración** puede tocar el
+// PIN de otra persona. Cada familia puede cambiar el suyo.
 
 const { sb } = require('./_lib/db');
 const { hashPin, validarPin } = require('./_lib/pin');
+const { delRequest } = require('./_lib/sesion');
+
+// Mismo criterio que /api/login y que src/perfiles.js: lo que la cuenta PUEDE
+// VER, no la etiqueta heredada de cuando los roles eran uno solo.
+function entraAlPanel(f) {
+  const roles = Array.isArray(f.roles) && f.roles.length
+    ? f.roles
+    : (f.role === 'admin' ? ['admin', 'familia'] : ['familia']);
+  return roles.some(r => r !== 'familia');
+}
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -27,15 +47,40 @@ module.exports = async (req, res) => {
 
     if (!familyId) return res.status(400).json({ error: 'Falta la familia' });
 
-    const filas = await sb('/families?select=id,name,role,pin_hash&id=eq.' + encodeURIComponent(familyId) + '&limit=1');
+    // ── Quién llama ─────────────────────────────────────────────────────────
+    const sesion = delRequest(req);
+    if (!sesion) {
+      return res.status(401).json({
+        error: 'Sesión no válida o vencida. Vuelve a entrar y reinténtalo.',
+      });
+    }
+    const esAdmin = Array.isArray(sesion.roles) && sesion.roles.includes('admin');
+    const esSuPropio = String(sesion.family_id) === String(familyId);
+    if (!esAdmin && !esSuPropio) {
+      return res.status(403).json({
+        error: 'Solo Administración puede cambiar el PIN de otra familia.',
+      });
+    }
+
+    let filas;
+    try {
+      filas = await sb('/families?select=id,name,role,roles,pin_hash&id=eq.' + encodeURIComponent(familyId) + '&limit=1');
+    } catch (e) {
+      // Antes de la migración 005 no existe `roles`.
+      if (!/roles/.test(e.message || '')) throw e;
+      filas = await sb('/families?select=id,name,role,pin_hash&id=eq.' + encodeURIComponent(familyId) + '&limit=1');
+    }
     const fam = filas && filas[0];
     if (!fam) return res.status(404).json({ error: 'Esa familia ya no existe' });
 
     // Quitar el PIN
     if (pin === null || pin === '' || pin === undefined) {
-      if (fam.role === 'admin') {
+      // Vale para las seis comisiones, no solo para Admin: dejar sin PIN a una
+      // cuenta que ve saldos y flujo de caja de toda la cooperativa la deja sin
+      // credencial y, además, sin poder entrar — /api/login la rechazaría.
+      if (entraAlPanel(fam)) {
         return res.status(400).json({
-          error: 'No se puede dejar sin PIN a un administrador. Si quieres quitárselo, primero pásalo a Familia.',
+          error: 'No se puede dejar sin PIN a una cuenta con acceso al panel. Si quieres quitárselo, primero quítale sus perfiles de comisión.',
         });
       }
       await sb('/families?id=eq.' + encodeURIComponent(familyId), {

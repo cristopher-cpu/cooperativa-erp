@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod, getProviders, loginFamily,
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
-  getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, getAdjustments,
-  getPurchaseOrders, getPeriodCharges, getChargeExemptions
+  getBodega, getBodegaAssignments, asignarBodegaConCargo, borrarAsignacionConReverso, getAdjustments,
+  getPurchaseOrders, getPeriodCharges, getChargeExemptions, getPortada, cerrarSesion, getTokenRechazado
 } from './supabaseClient';
 import {
   TIPOS, clp, cuentaDeFamilia, parseItems, estadoPedidos, estadoConfirmacionPorProducto,
@@ -29,37 +29,74 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [carts, setCarts] = useState({});
 
+  // ── La carga ocurre en dos fases, y no es un detalle ─────────────────────
+  //
+  // ANTES de entrar solo se pide `/api/portada`: nombres, iniciales y si cada
+  // uno tiene PIN. Nada más. Con RLS encendido el navegador sin sesión no puede
+  // leer `families`, y con razón — esa tabla tiene los correos y los saldos de
+  // las diecisiete familias, que es justo el hallazgo crítico que RLS cierra.
+  //
+  // DESPUÉS de entrar se carga el resto, ya con el token firmado en cada
+  // consulta. Antes todo se pedía al montar, así que abrir la URL bastaba para
+  // descargarse la cooperativa completa.
+  const [avisoSesion, setAvisoSesion] = useState(null);
+
   useEffect(() => {
     let cancelled = false;
     const timeout = setTimeout(() => { if (!cancelled) setLoading(false); }, 12000);
 
-    async function loadData() {
-      try {
-        const [fams, prods, per, provs] = await Promise.all([getFamilies(), getProducts(), getPeriod(), getProviders()]);
-        if (cancelled) return;
-        setFamilies(fams);
-        setProducts(prods);
-        setPeriod(per);
-        setProviders(provs);
-        // Sealed orders load in a dedicated effect keyed on period.id (see below),
-        // so they always re-sync when the active period changes (e.g. after closing one).
-      } catch (error) {
-        console.error('Error cargando datos:', error);
-      } finally {
-        if (!cancelled) {
-          clearTimeout(timeout);
-          setLoading(false);
-        }
-      }
-    }
-    loadData();
+    getPortada().then(d => {
+      if (cancelled) return;
+      setFamilies(d.familias || []);
+      setPeriod(d.period || null);
+      if (d.error) setAvisoSesion(d.error);
+    }).catch(e => {
+      console.error('Error cargando la pantalla de ingreso:', e);
+    }).finally(() => {
+      if (!cancelled) { clearTimeout(timeout); setLoading(false); }
+    });
+
     return () => { cancelled = true; clearTimeout(timeout); };
   }, []);
 
+  // Fase dos: ya hay sesión. Se recarga `families` completo —ahora sí con
+  // correos y saldos, que el panel y la cuenta de la propia familia necesitan—
+  // más productos, proveedores y el período con todas sus fechas.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    Promise.all([getFamilies(), getProducts(), getPeriod(), getProviders()])
+      .then(([fams, prods, per, provs]) => {
+        if (cancelled) return;
+        if (fams && fams.length) setFamilies(fams);
+        setProducts(prods);
+        if (per) setPeriod(per);
+        setProviders(provs);
+        // Si la sesión no alcanza para leer, RLS está encendido y algo falta:
+        // casi siempre el secreto JWT en el servidor. Decirlo es la diferencia
+        // entre una pantalla vacía inexplicable y un problema con nombre.
+        // `getTokenRechazado()` distingue los dos fracasos posibles, que se ven
+        // igual en pantalla y se arreglan distinto: que Supabase no acepte la
+        // firma (problema de secreto) o que la acepte y las políticas nieguen
+        // (problema de perfiles).
+        const rechazo = getTokenRechazado();
+        if (rechazo) setAvisoSesion(rechazo);
+        else if ((!fams || !fams.length) && !avisoSesion) {
+          setAvisoSesion('Entraste, pero la base no devolvió datos. Si RLS ya está encendido en Supabase, revisa que SUPABASE_JWT_SECRET esté configurado en el servidor y que coincida con el secreto del proyecto.');
+        }
+      })
+      .catch(e => console.error('Error cargando datos:', e));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
   // Re-sync sealed orders whenever the active period changes (mount, or after closing a period).
   // This prevents the previous period's orders from lingering and blocks double-charging on re-close.
+  //
+  // Espera a que haya sesión: sin ella, con RLS encendido, esto solo gasta una
+  // consulta que la base va a rechazar.
   useEffect(() => {
-    if (!period?.id) { setSealed({}); return; }
+    if (!period?.id || !user) { setSealed({}); return; }
     let cancelled = false;
     getSealedOrders(period.id).then(orders => {
       if (cancelled) return;
@@ -69,10 +106,14 @@ function App() {
       setCarts({});
     });
     return () => { cancelled = true; };
-  }, [period?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period?.id, user?.id]);
 
   const login = u => setUser(u);
-  const logout = () => setUser(null);
+
+  // Cerrar sesión tiene que borrar el token, no solo el estado de React. Sin
+  // esto, el token seguiría firmando consultas después de "salir".
+  const logout = () => { cerrarSesion(); setUser(null); setAvisoSesion(null); };
 
   // ── Cargos fijos del período ──────────────────────────────────────────────
   //
@@ -158,11 +199,25 @@ function App() {
   }
 
   if (!user) {
-    return <Welcome families={families} onLogin={login} period={period} />;
+    return <Welcome families={families} onLogin={login} period={period} aviso={avisoSesion} />;
   }
+
+  // Un problema de sesión no se puede quedar en la pantalla de ingreso: el
+  // síntoma aparece DESPUÉS de entrar, cuando las pantallas salen vacías. La
+  // franja va arriba de todo y no se puede cerrar, porque mientras esté ahí no
+  // se puede confiar en nada de lo que se ve.
+  const franjaSesion = avisoSesion ? (
+    <div style={{ background: '#c62828', color: 'white', padding: '10px 14px', position: 'sticky', top: 0, zIndex: 100 }}>
+      <p style={{ fontSize: '12px', margin: 0, fontWeight: 500, lineHeight: 1.5 }}>
+        ⚠ {avisoSesion}
+      </p>
+    </div>
+  ) : null;
 
   if (esDelPanel(user)) {
     return (
+      <>
+      {franjaSesion}
       <AdminApp
         user={user}
         families={families}
@@ -185,10 +240,13 @@ function App() {
         markRetiredLocal={markRetiredLocal}
         updateFamilyBalance={updateFamilyBalance}
       />
+      </>
     );
   }
 
   return (
+    <>
+    {franjaSesion}
     <FamilyApp
       user={user}
       families={families}
@@ -203,12 +261,13 @@ function App() {
       cargos={cargos}
       logout={logout}
     />
+    </>
   );
 }
 
 // ─── WELCOME / LOGIN ──────────────────────────────────────────────────────────
 
-function Welcome({ families, onLogin, period }) {
+function Welcome({ families, onLogin, period, aviso }) {
   const [loginFam, setLoginFam] = useState(null);
   const [pin, setPin] = useState('');
   const [pinErr, setPinErr] = useState('');
@@ -232,6 +291,10 @@ function Welcome({ families, onLogin, period }) {
     const res = await loginFamily(loginFam.id, pin);
     setVerificando(false);
     if (res.error) { setPinErr(res.error); return; }
+    // Si el servidor no pudo firmar la sesión, se avisa acá mismo y no después
+    // con una pantalla vacía: entrar y no ver nada es el síntoma de que falta
+    // SUPABASE_JWT_SECRET, y ese diagnóstico no se adivina.
+    if (res.avisoSesion) console.warn('login:', res.avisoSesion);
     // Se entra con lo que devuelve el servidor, no con la fila que ya teníamos.
     onLogin(res.family || loginFam);
   };
@@ -314,6 +377,22 @@ function Welcome({ families, onLogin, period }) {
         <h1 style={{ fontSize: '28px', marginBottom: '8px', fontWeight: 700, color: '#2d5a2d', letterSpacing: '-0.02em' }}>Cooperativa de Compras</h1>
         <p style={{ color: '#666', margin: 0, fontSize: '14px' }}>{period?.label} · {period?.month}</p>
       </div>
+
+      {aviso && (
+        <div style={{ background: '#ffebee', border: '1px solid #ef9a9a', borderRadius: '10px', padding: '1rem', marginBottom: '1.5rem', maxWidth: '620px', margin: '0 auto 1.5rem' }}>
+          <p style={{ fontSize: '13px', color: '#c62828', margin: 0, fontWeight: 500, lineHeight: 1.6 }}>{aviso}</p>
+        </div>
+      )}
+
+      {families.length === 0 && !aviso && (
+        <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1rem', marginBottom: '1.5rem', maxWidth: '620px', margin: '0 auto 1.5rem' }}>
+          <p style={{ fontSize: '13px', color: '#e65100', margin: 0, lineHeight: 1.6 }}>
+            No se pudo cargar la lista de familias. Si acabas de encender RLS en Supabase, revisa que
+            <strong> SUPABASE_SERVICE_ROLE_KEY</strong> esté configurada en el servidor: <code>/api/portada</code> la
+            necesita para armar esta pantalla.
+          </p>
+        </div>
+      )}
 
       {admins.length > 0 && (
         <>
@@ -447,25 +526,26 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
       total_value: totalValue,
       period_id: period.id,
     };
-    const result = await addBodegaAssignment(asn);
-    if (result) {
-      setBodegaAssignments(p => [result, ...p]);
-      const newBal = (currentUser.balance || 0) - totalValue;
-      await updateFamilyBalance(user.id, newBal);
-      setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: newBal } : f));
-      setReservingItem(null);
-      setReserveQty('');
-      setReserveErr('');
-    } else { setReserveErr('Error al reservar'); }
+    // El cargo al saldo lo aplica la base (trigger de la migración 010), no este
+    // navegador: con RLS encendido una familia no puede escribir su propio saldo
+    // —y no debería poder, o cualquiera se pondría en cero—. `asignarBodegaConCargo`
+    // se adapta solo si la migración todavía no corrió.
+    const res = await asignarBodegaConCargo(asn, currentUser.balance || 0);
+    if (res.error) { setReserveErr(res.error); setReserveSaving(false); return; }
+    setBodegaAssignments(p => [res.asignacion, ...p]);
+    setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: res.balance } : f));
+    setReservingItem(null);
+    setReserveQty('');
+    setReserveErr(res.aviso || '');
     setReserveSaving(false);
   };
 
   const handleCancelReservation = async (asn) => {
-    await deleteBodegaAssignment(asn.id);
+    const res = await borrarAsignacionConReverso(asn, currentUser.balance || 0);
+    if (res.error) { setReserveErr(res.error); return; }
     setBodegaAssignments(p => p.filter(a => a.id !== asn.id));
-    const newBal = (currentUser.balance || 0) + asn.total_value;
-    await updateFamilyBalance(user.id, newBal);
-    setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: newBal } : f));
+    setFamilies(p => p.map(f => f.id === user.id ? { ...f, balance: res.balance } : f));
+    if (res.aviso) setReserveErr(res.aviso);
   };
   const cats = ['all', ...new Set(products.map(p => p.category).filter(Boolean))];
   const vis = useMemo(() =>

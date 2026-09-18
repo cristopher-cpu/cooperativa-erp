@@ -1,7 +1,7 @@
 # Fase 2 — Estado, decisiones y pendientes
 
 Cooperativa de Consumo Responsable **Quilpueblo**.
-Última actualización: 18 de septiembre de 2026 (etapa 4c: retiros, perfiles en el login, cargos múltiples).
+Última actualización: 18 de septiembre de 2026 (etapas 4c a 7 y autenticación real).
 
 ---
 
@@ -592,26 +592,106 @@ real y no solo leyendo el código.
   maestro, nunca de la copia congelada dentro del pedido.
 - **`/api/estado` publicaba el correo de pruebas.** Ahora lo enmascara.
 
-### Abierto — 🔴 crítico
+### Los dos críticos — RESUELTOS en código, PENDIENTE ejecutar (18-sep-2026)
 
-1. **El panel admin está abierto a internet.** Ninguna de las 17 familias tiene
-   PIN. Quien abra la URL entra como administrador y puede editar saldos, cerrar
-   períodos y cambiar roles. No requiere conocimiento técnico.
-2. **La base es legible y escribible sin autenticación.** La clave pública va en
-   el bundle y RLS está apagado. Verificado desde fuera de la app: se descargan
-   las 17 familias con correos y saldos con un solo comando; escribir también
-   funciona.
+Los dos hallazgos eran, textualmente:
 
-Ambas tienen la misma raíz: no hay autenticación real. El argumento de "todos son
-socios de confianza" aplica a *quién usa* el sistema, no a *quién puede llegar*
-a él, y el sitio está publicado.
+1. **El panel admin abierto a internet.** Quien abriera la URL entraba como
+   administrador y podía editar saldos, cerrar períodos y cambiar roles.
+2. **La base legible Y ESCRIBIBLE sin autenticación.** Clave pública en el
+   bundle y RLS apagado.
 
-**Costo de arreglarlo: $0.** Supabase Auth es gratis hasta 50.000 usuarios activos
-(hay 17), RLS es una función de PostgreSQL ya presente, y los correos de
-autenticación pueden salir por el Brevo ya configurado. Lo que cuesta es tiempo y
-decidir si se conserva el acceso por nombre + PIN (más trabajo: PIN cifrado,
-verificado en servidor, credencial firmada) o se migra a correo + contraseña
-(más directo, pero cambia lo que se va a enseñar en las capacitaciones).
+**Verificado de nuevo el 18-sep-2026, desde fuera de la aplicación:** el
+hallazgo 2 seguía vivo — `families`, `products`, `periods` y `sealed_orders` se
+descargaban con un comando. Del hallazgo 1, el estado había mejorado sin que el
+documento lo registrara: la migración 003 ya estaba corrida y 3 de las 17
+familias tenían PIN, no cero.
+
+#### Qué se construyó
+
+**Decisión: se conserva nombre + PIN, con sesión firmada.** Cambiar a correo +
+contraseña habría obligado a capacitar de nuevo a diecisiete familias. En vez de
+eso, `/api/login` verifica el PIN con scrypt y emite un **JWT HS256 firmado con
+el secreto del propio proyecto Supabase**. La base lo valida igual que si lo
+hubiera emitido Supabase Auth: la garantía criptográfica es la misma, y no hubo
+que reescribir las cincuenta funciones de datos del navegador.
+
+Piezas:
+
+- `api/_lib/sesion.js` — emite y verifica el token. Sin librerías: un JWT HS256
+  son tres pedazos en base64url y un HMAC-SHA256, y `crypto` de Node lo hace.
+  Los perfiles viajan **dentro** del token, firmados, así que el navegador no
+  puede mentir sobre sus propios permisos.
+- `api/portada.js` — resuelve el huevo-y-gallina: para entrar hay que elegir su
+  nombre de una lista, y con RLS encendido nadie sin sesión puede leer
+  `families`. Devuelve **solo** nombres, iniciales y si cada uno tiene PIN. Ni
+  correos, ni saldos, ni `pin_hash`, ni fechas de último acceso.
+- `App.js` carga en **dos fases**: la portada antes de entrar, todo lo demás
+  después y con el token puesto. Antes, abrir la URL bastaba para descargarse la
+  cooperativa completa.
+- El token vive **solo en memoria**: no en localStorage. Varias socias usan el
+  computador de la casa o del centro comunitario, y la sesión de una no debe
+  seguir abierta para la siguiente persona que se siente. Recargar obliga a
+  entrar de nuevo, que es lo que ya pasaba.
+
+**Migración `010_rls_y_sesiones.sql`** enciende RLS en todas las tablas con
+políticas por perfil. No se usa `auth.uid()`: hace `(claims->>'sub')::uuid` y
+los `families.id` de esta base son TEXT, así que reventaría. Las políticas leen
+`auth.jwt() ->> 'family_id'`.
+
+#### Tres huecos que aparecieron al escribir las políticas
+
+Ninguno era visible antes, y los tres se habrían descubierto en producción:
+
+- **`/api/set-pin` no verificaba quién llamaba.** Su propio comentario decía que
+  daba igual «mientras RLS siga apagado». Con RLS encendido dejaba de dar igual
+  en el peor sentido: usa la clave de servicio, así que sería la única puerta
+  abierta, y quien pudiera llamarla **se asignaría el PIN de una administradora
+  y entraría como ella**. Ahora exige sesión, y solo Administración toca el PIN
+  de otra persona.
+- **`/api/enviar-orden` tampoco.** Manda correos reales a los trece proveedores.
+  Ahora exige el perfil Proveedores.
+- **Una familia podía ponerse el saldo en cero** desde la consola del navegador.
+  La política se lo prohíbe. Eso rompía la reserva de bodega, que cargaba el
+  saldo desde el cliente, así que ese cargo pasó a un **trigger** — que además
+  es atómico y cierra uno de los ocho lugares con lectura-modificación-escritura
+  que anota §8.
+
+#### Qué falta ejecutar, en este orden
+
+La migración 010 es la única de toda la fase que puede dejar a la cooperativa
+sin poder trabajar. El orden está en el encabezado del archivo y se resume así:
+
+1. Configurar en Vercel, **sin** prefijo `REACT_APP_`: `SUPABASE_JWT_SECRET` y
+   `SUPABASE_SERVICE_ROLE_KEY`. Con ese prefijo se incrustarían en el
+   JavaScript público, y la clave de servicio ahí haría que RLS no sirviera para
+   nada — peor que no encenderlo, porque parecería protegido.
+2. Desplegar. **Y probar antes de seguir:** con RLS todavía apagado, si se entra
+   y se trabaja normalmente, es que Supabase acepta el token firmado. Si la
+   firma no le sirviera, PostgREST responde 401 a todo y la aplicación se cae de
+   inmediato — sale una franja roja diciéndolo con nombre. El riesgo real es que
+   este proyecto usa el formato de clave nuevo (`sb_publishable_...`) y algunos
+   proyectos así firman con claves asimétricas, donde el secreto HS256 ya no
+   vale. **Este paso lo revela sin arriesgar nada.**
+3. **Asignar PIN a las 10 cuentas con perfil de panel que no lo tienen.** Al
+   18-sep-2026 hay 12 con perfil y 2 con PIN (Fabián y Ruby, que sí pueden
+   entrar a ponerlos). El panel las lista en rojo en la pestaña Familias.
+4. Recién entonces ejecutar `010_rls_y_sesiones.sql`.
+
+Al final del archivo, comentado, está el bloque que **apaga RLS** en todas las
+tablas si hay que operar ya. Es una salida de emergencia, no una alternativa.
+
+#### Qué NO protege esto, dicho claramente
+
+Un token válido de una comisión permite todo lo que esa comisión puede hacer,
+incluso saltándose la interfaz. Es correcto: son socias de confianza con una
+credencial verificada. Lo que se cierra es el acceso de **quien no tiene
+credencial**, que es el problema de un sitio publicado.
+
+Y el PIN sigue siendo un PIN: 4 a 8 dígitos. `/api/login` limita a 8 intentos
+por 10 minutos y el hash es scrypt con costo alto, pero nunca va a ser tan
+fuerte como una contraseña. Es el compromiso aceptado para que las socias no
+tengan que recordar credenciales.
 
 ### Abierto — 🟠 alto
 
@@ -625,10 +705,26 @@ verificado en servidor, credencial firmada) o se migra a correo + contraseña
 
 ### Abierto — 🟡 medio
 
-4. **Saldos con lectura-modificación-escritura en 8 lugares.** Todos calculan
-   `(saldo || 0) ± monto` en el navegador y sobrescriben. Dos personas operando a
-   la vez pierden un ajuste sin aviso.
+4. **Saldos con lectura-modificación-escritura en 7 lugares** (eran 8). Todos
+   calculan `(saldo || 0) ± monto` en el navegador y sobrescriben. Dos personas
+   operando a la vez pierden un ajuste sin aviso. El de las **reservas de
+   bodega** se cerró el 18-sep-2026: lo aplica un trigger en la base, que es
+   atómico, porque RLS le prohíbe a una familia escribir su propio saldo y hubo
+   que reemplazarlo. Los otros siete siguen igual, y el mismo patrón —un trigger
+   o una función en la base— sirve para todos.
 5. **Las reservas de bodega pueden sobrevender.** El stock disponible se calcula
-   desde el estado local; dos familias reservando a la vez ven ambas stock.
+   desde el estado local; dos familias reservando a la vez ven ambas stock. El
+   *cargo* ya es atómico (punto 4), la *validación de stock* todavía no: falta
+   moverla a la base, por ejemplo con una restricción o un trigger que rechace
+   la asignación si excede lo disponible.
+   Sí se corrigió que lo dado de baja por merma cuente como no disponible
+   (`disponibleEnBodega`): antes un producto que se echó a perder seguía
+   apareciendo para reservar.
 6. **El resumen del cierre no cuadra con lo cobrado.** `totalValue` incluye el
-   pedido propio del admin; el bucle de cobro solo recorre familias.
+   pedido propio del admin; el bucle de cobro solo recorre familias. **Ahora la
+   discrepancia se VE** en vez de estar escondida: el resumen de Flujo de Caja
+   (etapa 4c) cuenta con `rolesDe(f).includes('familia')` —que es lo correcto,
+   las administradoras también piden— mientras `handleClosePeriod` sigue usando
+   `f.role === 'familia'` y las omite. Arreglarlo es de una línea, y **sigue
+   pendiendo de una decisión de la cooperativa** porque cambia a quién se le
+   cobra plata.

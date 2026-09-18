@@ -10,6 +10,7 @@
 
 const { sb } = require('./_lib/db');
 const { verifyPin } = require('./_lib/pin');
+const { emitir, haySecreto } = require('./_lib/sesion');
 
 // Contador de intentos en memoria. Se pierde cuando la función se apaga, y no se
 // comparte entre instancias: no es una defensa sólida, es un freno para que un
@@ -94,6 +95,27 @@ function entraAlPanel(f) {
   return roles.some(r => r !== 'familia');
 }
 
+
+// Respuesta de entrada exitosa, con la sesión firmada adentro.
+//
+// El token es lo que permite a la base saber quién consulta. Si el secreto JWT
+// no está configurado, se entra igual pero SIN token: es lo mismo que pasaba
+// antes de esta capa y mantiene la aplicación en pie. Lo que no se puede hacer
+// es callarlo — con RLS encendido y sin token no se vería un solo dato, y el
+// aviso es lo que explica por qué.
+function respuestaEntrada(fam, extra) {
+  const sesion = emitir(fam);
+  return Object.assign({
+    ok: true,
+    family: familiaPublica(fam),
+    token: sesion ? sesion.token : null,
+    expiraEn: sesion ? sesion.expiraEn : null,
+    avisoSesion: sesion ? null
+      : 'Falta la variable SUPABASE_JWT_SECRET en el servidor: se entró sin sesión firmada. ' +
+        'Si RLS ya está encendido en Supabase, no se va a ver ningún dato.',
+  }, extra || {});
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -122,11 +144,9 @@ module.exports = async (req, res) => {
       // ningún agujero nuevo — antes de la migración nadie tenía PIN de todos
       // modos — pero evita dejar la cooperativa encerrada fuera.
       console.warn('login: migración 003 pendiente, exigencia de PIN desactivada');
-      return res.status(200).json({
-        ok: true,
-        family: familiaPublica(fam),
+      return res.status(200).json(respuestaEntrada(fam, {
         avisoMigracion: 'La migración 003 no ha corrido: el acceso por PIN está inactivo y cualquiera puede entrar. Ejecuta db/migrations/003_pin_cifrado.sql en Supabase.',
-      });
+      }));
     }
 
     if (!fam.pin_hash) {
@@ -141,7 +161,7 @@ module.exports = async (req, res) => {
         });
       }
       // Las familias sin PIN mantienen el acceso directo de siempre.
-      return res.status(200).json({ ok: true, family: familiaPublica(fam) });
+      return res.status(200).json(respuestaEntrada(fam));
     }
 
     if (!verifyPin(pin, fam.pin_hash)) {
@@ -160,7 +180,7 @@ module.exports = async (req, res) => {
       method: 'PATCH', body: { last_login_at: new Date().toISOString() }, prefer: 'return=minimal',
     }).catch(() => {});
 
-    return res.status(200).json({ ok: true, family: familiaPublica(fam) });
+    return res.status(200).json(respuestaEntrada(fam));
   } catch (e) {
     console.error('login:', e);
     return res.status(500).json({ error: 'No se pudo verificar el acceso. Intenta de nuevo.' });
