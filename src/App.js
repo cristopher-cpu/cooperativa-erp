@@ -1201,7 +1201,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         {tabActiva === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargos={cargos} setSealed={setSealed} period={period} products={products} currentAdmin={user} />}
         {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargos={cargos} />}
         {tabActiva === 'flujo' && <AdminFlujoCaja period={period} cargos={cargos} recargarCargos={recargarCargos} families={families} setFamilies={setFamilies} sealed={sealed} currentAdmin={user} puedeEximir={puedeEximir} />}
-        {tabActiva === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
+        {tabActiva === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} currentAdmin={user} />}
         {tabActiva === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
         {tabActiva === 'proveedores' && <AdminProveedores providers={providers} setProviders={setProviders} products={products} setProducts={setProducts} />}
         {tabActiva === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}

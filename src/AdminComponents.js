@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, unmarkRetired, copyChargesToPeriod } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, getBajas, addBaja, deleteBaja, unmarkRetired, copyChargesToPeriod } from './supabaseClient';
 import {
   cuentaDeFamilia, ajustesPorFamilia, metricasProveedores, estadoPedidos,
   estadoConfirmacionPorProducto, ESTADOS_CONFIRMACION, parseItems, clp,
   pendientesDeConfirmacion, puedeMarcarRetiro,
+  MOTIVOS_BAJA, disponibleEnBodega, resumenBajas,
 } from './calculos';
 import { PERFILES, rolesDe, esDelPanel, etiquetasDe } from './perfiles';
 import { CumplimientoProveedores } from './CumplimientoProveedores';
@@ -2509,7 +2510,7 @@ export function AdminAnalytics({ families = [], products = [] }) {
 
 // ─── BODEGA ───────────────────────────────────────────────────────────────────
 
-export function AdminBodega({ period, families, setFamilies, products = [] }) {
+export function AdminBodega({ period, families, setFamilies, products = [], currentAdmin }) {
   const [items, setItems] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2524,20 +2525,109 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
   const [assignSaving, setAssignSaving] = useState(false);
   const [assignErr, setAssignErr] = useState('');
 
+  // Bajas: mermas, regalos y sobrantes (etapa 7).
+  const [bajas, setBajas] = useState([]);
+  const [faltaMigracionBajas, setFaltaMigracionBajas] = useState(false);
+  const [bajaItem, setBajaItem] = useState(null);
+  const [bajaForm, setBajaForm] = useState({ reason: 'merma', quantity: '', note: '' });
+  const [bajaSaving, setBajaSaving] = useState(false);
+  const [bajaErr, setBajaErr] = useState('');
+  const [bajaMsg, setBajaMsg] = useState(null);
+
   useEffect(() => {
     if (!period) { setLoading(false); return; }
-    Promise.all([getBodega(period.id), getBodegaAssignments(period.id)]).then(([itms, asns]) => {
-      setItems(itms);
-      setAssignments(asns);
-      setLoading(false);
-    });
+    Promise.all([getBodega(period.id), getBodegaAssignments(period.id), getBajas(period.id)])
+      .then(([itms, asns, bjs]) => {
+        setItems(itms);
+        setAssignments(asns);
+        setFaltaMigracionBajas(bjs === null);
+        setBajas(bjs || []);
+        setLoading(false);
+      });
   }, [period]);
 
+  // Lo dado de baja también resta. Antes solo se restaban las asignaciones, así
+  // que un producto que se echó a perder seguía apareciendo como disponible
+  // para reservar — y alguien lo iba a reservar.
   const getRemaining = (itemId) => {
     const item = items.find(i => i.id === itemId);
-    if (!item) return 0;
-    const used = assignments.filter(a => a.bodega_id === itemId).reduce((s, a) => s + parseFloat(a.quantity), 0);
-    return Math.max(0, parseFloat(item.quantity) - used);
+    return disponibleEnBodega({ item, asignaciones: assignments, bajas });
+  };
+
+  const abrirBaja = (item) => {
+    setBajaItem(item);
+    setBajaForm({ reason: 'merma', quantity: '', note: '' });
+    setBajaErr(''); setBajaMsg(null);
+  };
+
+  const guardarBaja = async () => {
+    const cfg = MOTIVOS_BAJA[bajaForm.reason];
+    const qty = parseFloat(bajaForm.quantity);
+    if (isNaN(qty) || qty <= 0) { setBajaErr('La cantidad debe ser mayor que cero'); return; }
+    const disp = getRemaining(bajaItem.id);
+    if (qty > disp + 0.001) { setBajaErr('Solo quedan ' + disp + ' ' + bajaItem.unit + ' sin asignar ni dar de baja'); return; }
+    // El motivo es obligatorio en la base y debe serlo acá: una merma sin
+    // explicación es un número que nadie puede defender en la asamblea, y es
+    // justo el número que va a generar preguntas.
+    if (!bajaForm.note.trim()) { setBajaErr('Escribe qué pasó. Es obligatorio: una baja sin explicación no se puede rendir.'); return; }
+
+    const monto = Math.round(qty * (Number(bajaItem.price) || 0));
+
+    if (cfg.cuestaPlata && monto > 0 && !window.confirm(
+      cfg.label + ' de ' + qty + ' ' + bajaItem.unit + ' de ' + bajaItem.product_name + '.\n\n' +
+      'Son ' + clp(monto) + ' que la cooperativa pagó y no va a recuperar, así que se va a ' +
+      'registrar un EGRESO por ese monto en el flujo de caja de ' + period.label + '.\n\n¿Confirmar?'
+    )) return;
+
+    setBajaSaving(true); setBajaErr('');
+    const res = await addBaja({
+      period_id: period.id,
+      bodega_id: bajaItem.id,
+      product_name: bajaItem.product_name,
+      unit: bajaItem.unit,
+      quantity: qty,
+      unit_price: Number(bajaItem.price) || 0,
+      amount: monto,
+      reason: bajaForm.reason,
+      note: bajaForm.note.trim(),
+      created_by: currentAdmin ? currentAdmin.id : null,
+      created_by_name: currentAdmin ? currentAdmin.name : null,
+    }, { cuestaPlata: cfg.cuestaPlata, periodLabel: period.label });
+
+    if (res.error) { setBajaErr(res.error); setBajaSaving(false); return; }
+
+    setBajas(p => [res.baja, ...p]);
+    if (currentAdmin) {
+      addAdminLog({
+        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+        admin_id: currentAdmin.id, admin_name: currentAdmin.name,
+        action: 'bodega_baja',
+        details: cfg.label + ': ' + qty + ' ' + (bajaItem.unit || '') + ' de ' + bajaItem.product_name +
+                 ' (' + clp(monto) + ') — ' + bajaForm.note.trim(),
+      });
+    }
+    setBajaMsg(res.sinCaja
+      ? { tipo: 'err', texto: 'Se registró la baja, pero el egreso no llegó al flujo de caja (la tabla cash_flow no está disponible). Anótalo a mano.' }
+      : { tipo: 'ok', texto: cfg.label + ' registrada' + (cfg.cuestaPlata && monto > 0 ? ' y anotada como egreso de ' + clp(monto) + ' en el flujo de caja.' : '.') });
+    setBajaItem(null);
+    setBajaSaving(false);
+  };
+
+  const borrarBaja = async (b) => {
+    const cfg = MOTIVOS_BAJA[b.reason] || {};
+    if (!window.confirm(
+      '¿Eliminar esta ' + (cfg.label || 'baja').toLowerCase() + ' de ' + b.quantity + ' ' + (b.unit || '') +
+      ' de ' + b.product_name + '?\n\n' +
+      'El stock vuelve a estar disponible' +
+      (b.cash_flow_id ? ' y se borra el egreso de ' + clp(b.amount) + ' del flujo de caja' : '') + '.'
+    )) return;
+
+    const res = await deleteBaja(b);
+    if (res.error) { setBajaMsg({ tipo: 'err', texto: res.error }); return; }
+    setBajas(p => p.filter(x => x.id !== b.id));
+    setBajaMsg(res.egresoHuerfano
+      ? { tipo: 'err', texto: 'La baja se eliminó, pero el egreso quedó en el flujo de caja. Bórralo desde ahí: muestra una pérdida que ya no existe.' }
+      : { tipo: 'ok', texto: 'Baja eliminada. El stock volvió a estar disponible.' });
   };
 
   const handleAddItem = async () => {
@@ -2610,6 +2700,7 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
 
   const totalBodegaValue = items.reduce((s, i) => s + parseInt(i.price) * parseFloat(i.quantity), 0);
   const totalAssigned = assignments.reduce((s, a) => s + a.total_value, 0);
+  const resBajas = resumenBajas(bajas);
 
   if (!period) return (
     <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem' }}>
@@ -2621,18 +2712,75 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px', marginBottom: '1rem' }}>
         {[
           { l: 'Ítems en bodega', v: items.length, c: '#1565c0', bg: '#e3f2fd' },
           { l: 'Valor total', v: '$' + totalBodegaValue.toLocaleString('es-CL'), c: '#2e7d32', bg: '#e8f5e9' },
           { l: 'Total asignado', v: '$' + totalAssigned.toLocaleString('es-CL'), c: '#e65100', bg: '#fff3e0' },
+          // La pérdida va en el mismo lugar que el valor: es la cifra que hace
+          // que el stock de bodega y el flujo de caja cuadren, y separarla en
+          // otra pestaña sería volver a esconderla.
+          ...(resBajas.perdida > 0 || resBajas.n > 0
+            ? [{ l: 'Pérdida por mermas y regalos', v: '$' + resBajas.perdida.toLocaleString('es-CL'), c: '#c62828', bg: '#ffebee' }]
+            : []),
         ].map(m => (
           <div key={m.l} style={{ padding: '0.9rem', background: m.bg, borderRadius: '8px', textAlign: 'center' }}>
-            <p style={{ fontSize: '10px', color: m.c, margin: 0, fontWeight: 600 }}>{m.l}</p>
+            <p style={{ fontSize: '10px', color: m.c, margin: 0, fontWeight: 600, lineHeight: 1.3 }}>{m.l}</p>
             <p style={{ fontSize: '15px', fontWeight: 700, margin: '4px 0 0', color: m.c }}>{m.v}</p>
           </div>
         ))}
       </div>
+
+      {bajaMsg && (
+        <div style={{ background: bajaMsg.tipo === 'ok' ? '#e8f5e9' : '#ffebee', border: `1px solid ${bajaMsg.tipo === 'ok' ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', padding: '10px 13px', marginBottom: '1rem', display: 'flex', gap: '9px', alignItems: 'flex-start' }}>
+          <span>{bajaMsg.tipo === 'ok' ? '✓' : '⚠'}</span>
+          <p style={{ fontSize: '12px', color: bajaMsg.tipo === 'ok' ? '#2e7d32' : '#c62828', margin: 0, fontWeight: 500, lineHeight: 1.5 }}>{bajaMsg.texto}</p>
+          <button onClick={() => setBajaMsg(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#999' }}>✕</button>
+        </div>
+      )}
+
+      {faltaMigracionBajas && (
+        <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '8px', padding: '10px 13px', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '11px', color: '#e65100', margin: 0, lineHeight: 1.6 }}>
+            Para registrar mermas, regalos y sobrantes falta ejecutar{' '}
+            <code>db/migrations/009_mermas_regalos_sobrantes.sql</code> en Supabase. Todo lo demás de
+            bodega funciona igual.
+          </p>
+        </div>
+      )}
+
+      {/* Las bajas del período, por motivo. Merma y regalo van separados a
+          propósito: mezclarlos hace que la cooperativa parezca descuidada
+          cuando en realidad fue generosa, y al revés. */}
+      {resBajas.n > 0 && (
+        <div style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '11px', color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>
+            Salió de bodega sin venderse — {period.label}
+          </p>
+          {Object.entries(MOTIVOS_BAJA).filter(([m]) => resBajas.porMotivo[m].n > 0).map(([m, cfg]) => {
+            const r = resBajas.porMotivo[m];
+            return (
+              <div key={m} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0', borderBottom: '1px solid #f4f8f4', gap: '8px' }}>
+                <span style={{ fontSize: '12px', color: '#555' }} title={cfg.ayuda}>
+                  {cfg.ic} {cfg.label}
+                  <span style={{ color: '#aaa', fontSize: '10px' }}> · {r.n} registro{r.n === 1 ? '' : 's'}</span>
+                  {!cfg.cuestaPlata && <span style={{ color: '#1565c0', fontSize: '10px' }}> · no es pérdida</span>}
+                </span>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: cfg.color, whiteSpace: 'nowrap' }}>{clp(r.monto)}</span>
+              </div>
+            );
+          })}
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0', fontSize: '13px', fontWeight: 700 }}>
+            <span style={{ color: '#c62828' }}>Pérdida real de la cooperativa</span>
+            <span style={{ color: '#c62828' }}>{clp(resBajas.perdida)}</span>
+          </div>
+          <p style={{ fontSize: '10px', color: '#bbb', margin: '7px 0 0', lineHeight: 1.6 }}>
+            La pérdida ya está anotada como egreso en el flujo de caja de {period.label}: no basta con
+            bajar el stock, porque una merma es plata que la cooperativa pagó al proveedor y no vendió.
+            Las devoluciones y los ajustes de inventario no generan egreso.
+          </p>
+        </div>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <p style={{ fontSize: '13px', fontWeight: 600, color: '#333', margin: 0 }}>Stock en bodega — {period.label}</p>
@@ -2708,9 +2856,11 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
 
       {items.map(item => {
         const itemAssignments = assignments.filter(a => a.bodega_id === item.id);
+        const itemBajas = bajas.filter(b => String(b.bodega_id) === String(item.id));
         const remaining = getRemaining(item.id);
         const isExpanded = expandedItem === item.id;
         const isAssigning = assigningItem?.id === item.id;
+        const isBaja = bajaItem?.id === item.id;
         return (
           <div key={item.id} style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
             <div onClick={() => setExpandedItem(isExpanded ? null : item.id)}
@@ -2727,6 +2877,11 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
                     {remaining} {item.unit} disponibles
                   </span>
                   <span style={{ fontSize: '12px', color: '#aaa' }}>Total: {item.quantity} {item.unit}</span>
+                  {itemBajas.length > 0 && (
+                    <span style={{ fontSize: '12px', color: '#c62828', fontWeight: 600 }}>
+                      {itemBajas.reduce((s, b) => s + Number(b.quantity), 0)} {item.unit} de baja
+                    </span>
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
@@ -2760,7 +2915,113 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
                   </div>
                 )}
 
-                {isAssigning ? (
+                {/* Lo que salió de este ítem sin venderse */}
+                {itemBajas.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: '#666', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Salió sin venderse ({itemBajas.length})
+                    </p>
+                    {itemBajas.map(b => {
+                      const cfg = MOTIVOS_BAJA[b.reason] || {};
+                      return (
+                        <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 9px', background: cfg.bg, borderRadius: '6px', marginBottom: '5px', flexWrap: 'wrap' }}>
+                          <span>{cfg.ic}</span>
+                          <div style={{ flex: 1, minWidth: '130px' }}>
+                            <p style={{ fontSize: '12px', fontWeight: 600, margin: 0, color: '#333' }}>
+                              {cfg.label} <span style={{ fontWeight: 400, color: '#666' }}>· {b.quantity} {b.unit}</span>
+                            </p>
+                            <p style={{ fontSize: '10px', color: '#777', margin: '2px 0 0' }}>
+                              {b.note}
+                              {b.created_by_name && <span style={{ color: '#aaa' }}> · lo anotó {b.created_by_name}</span>}
+                              {!cfg.cuestaPlata && <span style={{ color: '#1565c0' }}> · no genera egreso</span>}
+                            </p>
+                          </div>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: cfg.color, whiteSpace: 'nowrap' }}>{clp(b.amount)}</span>
+                          <button onClick={() => borrarBaja(b)}
+                            style={{ width: '22px', height: '22px', border: '1px solid #ddd', background: 'white', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', color: '#888' }}>✕</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {isBaja ? (
+                  <div style={{ background: '#fffaf7', border: '1px solid #ffab91', borderRadius: '8px', padding: '1rem' }}>
+                    <p style={{ fontSize: '12px', fontWeight: 700, color: '#c62828', margin: '0 0 3px' }}>Dar de baja sin vender</p>
+                    <p style={{ fontSize: '11px', color: '#777', margin: '0 0 10px', lineHeight: 1.5 }}>
+                      El motivo decide si esto cuesta plata. No es una etiqueta: lo que la cooperativa
+                      perdió tiene que aparecer en el flujo de caja, o el período cuadra sin haber
+                      registrado nunca la pérdida.
+                    </p>
+
+                    <div style={{ display: 'grid', gap: '5px', marginBottom: '9px' }}>
+                      {Object.entries(MOTIVOS_BAJA).map(([m, cfg]) => {
+                        const sel = bajaForm.reason === m;
+                        return (
+                          <button key={m} onClick={() => { setBajaForm(p => ({ ...p, reason: m })); setBajaErr(''); }}
+                            style={{ textAlign: 'left', padding: '8px 10px', borderRadius: '7px', cursor: 'pointer',
+                                     border: '1px solid ' + (sel ? cfg.color : '#e8e8e8'),
+                                     background: sel ? cfg.bg : 'white' }}>
+                            <p style={{ fontSize: '12px', fontWeight: sel ? 700 : 500, margin: 0, color: sel ? cfg.color : '#555' }}>
+                              {cfg.ic} {cfg.label}
+                              {cfg.cuestaPlata
+                                ? <span style={{ fontSize: '9px', fontWeight: 700, color: '#c62828' }}> · cuesta plata</span>
+                                : <span style={{ fontSize: '9px', fontWeight: 700, color: '#1565c0' }}> · no es pérdida</span>}
+                            </p>
+                            <p style={{ fontSize: '10px', color: '#888', margin: '2px 0 0', lineHeight: 1.4 }}>
+                              {cfg.descripcion}. {sel && cfg.ayuda}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', marginBottom: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>
+                          Cantidad ({item.unit}) · máx {remaining}
+                        </label>
+                        <input type="number" step="0.5" min="0" max={remaining} placeholder="0" value={bajaForm.quantity}
+                          onChange={e => { setBajaForm(p => ({ ...p, quantity: e.target.value })); setBajaErr(''); }}
+                          style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px', boxSizing: 'border-box' }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>
+                          Qué pasó <span style={{ color: '#c62828' }}>*</span>
+                        </label>
+                        <input type="text" placeholder="Se congeló en el traslado, se donó al comedor, venció el 12..."
+                          value={bajaForm.note}
+                          onChange={e => { setBajaForm(p => ({ ...p, note: e.target.value })); setBajaErr(''); }}
+                          style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px', boxSizing: 'border-box' }} />
+                      </div>
+                    </div>
+
+                    {bajaForm.quantity > 0 && (() => {
+                      const cfg = MOTIVOS_BAJA[bajaForm.reason];
+                      const monto = Math.round(parseFloat(bajaForm.quantity || 0) * (Number(item.price) || 0));
+                      return (
+                        <div style={{ padding: '8px 11px', background: cfg.bg, borderRadius: '6px', marginBottom: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '11px', color: '#555' }}>
+                              {cfg.cuestaPlata ? 'Egreso que se anota en el flujo de caja' : 'Valor del stock que sale (sin egreso)'}
+                            </span>
+                            <span style={{ fontSize: '13px', fontWeight: 700, color: cfg.color }}>{clp(monto)}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {bajaErr && <p style={{ fontSize: '11px', color: '#c62828', margin: '0 0 8px', fontWeight: 500 }}>{bajaErr}</p>}
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button onClick={guardarBaja} disabled={bajaSaving}
+                        style={{ flex: 1, padding: '8px', background: MOTIVOS_BAJA[bajaForm.reason].color, color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '12px' }}>
+                        {bajaSaving ? 'Registrando...' : 'Registrar ' + MOTIVOS_BAJA[bajaForm.reason].label.toLowerCase()}
+                      </button>
+                      <button onClick={() => { setBajaItem(null); setBajaErr(''); }}
+                        style={{ padding: '8px 13px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : isAssigning ? (
                   <div style={{ background: '#f8fbff', border: '1px solid #90caf9', borderRadius: '8px', padding: '1rem' }}>
                     <p style={{ fontSize: '12px', fontWeight: 700, color: '#1565c0', margin: '0 0 10px' }}>Asignar a familia</p>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
@@ -2801,11 +3062,21 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
                     </div>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <button onClick={() => { setAssigningItem(item); setAssignForm({ family_id: '', quantity: '' }); setAssignErr(''); }}
                       disabled={remaining <= 0}
-                      style={{ flex: 1, padding: '7px', background: remaining > 0 ? '#e3f2fd' : '#f5f5f5', color: remaining > 0 ? '#1565c0' : '#999', border: '1px solid ' + (remaining > 0 ? '#90caf9' : '#dde8dd'), borderRadius: '6px', cursor: remaining > 0 ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600 }}>
+                      style={{ flex: 1, minWidth: '140px', padding: '7px', background: remaining > 0 ? '#e3f2fd' : '#f5f5f5', color: remaining > 0 ? '#1565c0' : '#999', border: '1px solid ' + (remaining > 0 ? '#90caf9' : '#dde8dd'), borderRadius: '6px', cursor: remaining > 0 ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600 }}>
                       {remaining > 0 ? '+ Asignar a familia' : 'Sin stock disponible'}
+                    </button>
+                    {/* Dar de baja es lo que el paso 08 del flujo llama
+                        "reporte de sobrantes". Sin esto, lo que se echó a
+                        perder se resolvía borrando el ítem, y así la pérdida
+                        desaparecía del período junto con el registro. */}
+                    <button onClick={() => abrirBaja(item)}
+                      disabled={remaining <= 0 || faltaMigracionBajas}
+                      title={faltaMigracionBajas ? 'Falta ejecutar la migración 009' : 'Merma, regalo, consumo, devolución o ajuste'}
+                      style={{ flex: 1, minWidth: '140px', padding: '7px', background: remaining > 0 && !faltaMigracionBajas ? '#fff3e0' : '#f5f5f5', color: remaining > 0 && !faltaMigracionBajas ? '#e65100' : '#999', border: '1px solid ' + (remaining > 0 && !faltaMigracionBajas ? '#ffcc80' : '#dde8dd'), borderRadius: '6px', cursor: remaining > 0 && !faltaMigracionBajas ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: 600 }}>
+                      🥀 Dar de baja
                     </button>
                     <button onClick={() => handleDeleteItem(item.id)}
                       style={{ padding: '7px 12px', background: '#fff5f5', border: '1px solid #ffcdd2', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#c62828' }}>

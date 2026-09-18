@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   getAllPeriods, getSealedOrders, getAdjustments, getPurchaseOrders,
-  getBodega, getBodegaAssignments, getPeriodCharges, getChargeExemptions,
+  getBodega, getBodegaAssignments, getBajas, getPeriodCharges, getChargeExemptions,
 } from './supabaseClient';
 import { construirCargos, clp } from './calculos';
 import { REPORTES, hojaPortada, nombreArchivo } from './reportes';
@@ -24,7 +24,7 @@ import { descargarXlsx } from './excel';
 //
 // ── Por qué se cargan los datos al elegir y no antes ────────────────────────
 //
-// Son seis consultas por período. Traerlas para los doce períodos al abrir la
+// Son siete consultas por período. Traerlas para los doce períodos al abrir la
 // pestaña gastaría la cuota de Supabase en datos que nadie pidió, y el proyecto
 // está en el plan gratuito.
 
@@ -54,12 +54,13 @@ export function AdminReportes({ families, products, providers, currentAdmin, per
     if (!p) return;
     setDatos(null); setErr('');
     try {
-      const [ordenes, ajustes, pos, bodega, asignaciones, charges, exemptions] = await Promise.all([
+      const [ordenes, ajustes, pos, bodega, asignaciones, bajas, charges, exemptions] = await Promise.all([
         getSealedOrders(p.id),
         getAdjustments(p.id),
         getPurchaseOrders(p.id),
         getBodega(p.id),
         getBodegaAssignments(p.id),
+        getBajas(p.id),
         getPeriodCharges(p.id),
         getChargeExemptions(p.id),
       ]);
@@ -76,6 +77,7 @@ export function AdminReportes({ families, products, providers, currentAdmin, per
         purchaseOrders: pos || [],
         bodega: bodega || [],
         asignaciones: asignaciones || [],
+        bajas: bajas || [],
         cargos: construirCargos({ charges, exemptions: exemptions || [], period: p }),
         faltanAjustes: ajustes === null,
       });
@@ -94,6 +96,7 @@ export function AdminReportes({ families, products, providers, currentAdmin, per
       retirados: Object.values(datos.sealed).filter(o => o.retired).length,
       ajustes: datos.ajustes.length,
       bodega: datos.bodega.length,
+      bajas: datos.bajas.length,
       cargos: datos.cargos.lista.length,
     };
   }, [datos, elegido]);
@@ -186,6 +189,7 @@ export function AdminReportes({ families, products, providers, currentAdmin, per
             {' '}{resumen.retirados} retirado{resumen.retirados === 1 ? '' : 's'} ·
             {' '}{resumen.ajustes} faltante{resumen.ajustes === 1 ? '' : 's'} o extra{resumen.ajustes === 1 ? '' : 's'} ·
             {' '}{resumen.bodega} ítem{resumen.bodega === 1 ? '' : 's'} en bodega ·
+            {resumen.bajas > 0 && <>{' '}{resumen.bajas} baja{resumen.bajas === 1 ? '' : 's'} de bodega ·</>}
             {' '}{resumen.cargos} cargo{resumen.cargos === 1 ? '' : 's'} fijo{resumen.cargos === 1 ? '' : 's'} de {clp(datos.cargos.total)}
           </p>
         )}

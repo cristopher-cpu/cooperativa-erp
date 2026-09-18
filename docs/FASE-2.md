@@ -418,22 +418,55 @@ Migración: `008_formato_de_venta.sql`. Agrega las dos columnas con restricción
 las cinco canónicas, y `price_history`. No interpreta el texto: un parser en SQL
 sería un parser peor, porque no puede pedir confirmación.
 
-### Etapa 7 — Mermas, regalos y sobrantes en bodega (nuevo, 6-sep-2026)
+### Etapa 7 — Mermas, regalos y sobrantes en bodega ✅ (18-sep-2026)
 
-Marcar producto que **no se vendió**: mal estado, vencimiento, o regalado.
+Del paso 08 del flujo: «identificación y reporte de sobrantes a la Comisión de
+Proveedores».
 
-No basta con descontarlo del stock: una merma **es pérdida de dinero de la
-cooperativa** y debe aparecer en el flujo de caja. Un regalo es una decisión
-deliberada, no un descuido, y conviene distinguirlos en los reportes.
+**Por qué no basta con bajar el stock.** Restarle 3 kilos al ítem de bodega deja
+el inventario correcto y la contabilidad ciega. Una merma **es plata que la
+cooperativa perdió**: compró el producto, lo pagó al proveedor y no lo vendió.
+Si solo se descuenta el stock, el flujo de caja del período cuadra sin haber
+registrado nunca esa pérdida, y Balance Contable no tiene de dónde explicar el
+descalce. Por eso cada baja con motivo que cuesta plata **genera un egreso en
+`cash_flow`**, y borrar la baja borra ese egreso.
 
-Engancha con el paso 08 del flujo: *"identificación y reporte de sobrantes a la
-Comisión de Proveedores"*.
+**Cinco motivos, y la distinción no es decorativa:**
 
-Nota: `supabaseClient.js` ya tiene funciones para tablas `inventory` y `movements`
-que **nadie llama** — código muerto de un intento anterior. Revisar si se
-reaprovechan antes de crear tablas nuevas.
+| Motivo | Qué es | ¿Cuesta plata? |
+|---|---|---|
+| `merma` | Se echó a perder, se rompió, se venció | Sí — pérdida involuntaria |
+| `regalo` | Se donó o se regaló | Sí — pérdida **deliberada** |
+| `consumo` | Se usó en una actividad de la cooperativa | Sí — gasto con propósito |
+| `devolucion` | Se le devolvió al proveedor | **No**: la plata vuelve o nunca se pagó |
+| `ajuste` | La cuenta física no cuadraba | **No**: es corrección de registro |
 
----
+Mezclar merma con regalo hace que la cooperativa parezca descuidada cuando en
+realidad fue generosa, y al revés: esconde una merma real detrás de una
+decisión. Son dos conversaciones distintas en la asamblea.
+
+**El motivo escrito es obligatorio.** Una merma sin explicación es un número que
+nadie puede defender, y es justo el número que va a generar preguntas.
+
+**Efecto secundario que era un bug.** `getRemaining` solo restaba las
+asignaciones, así que un producto que se echó a perder seguía apareciendo como
+disponible para reservar — y alguien lo iba a reservar. Ahora restan las tres
+cosas: asignado, dado de baja, y nada más (`disponibleEnBodega`).
+
+**Resuelto: qué hacer con `inventory` y `movements`.** El plan pedía revisar si
+se reaprovechaban antes de crear tablas nuevas. Verificado contra el respaldo el
+18-sep-2026: **cero filas en ambas y ningún llamador en toda la aplicación**.
+Reaprovecharlas parecía ahorro y no lo era: `movements` no tiene `period_id`
+—y acá todo se contabiliza por período— ni campo de motivo, ni vínculo con el
+ítem de bodega del que se descuenta. Habría que alterarlas hasta dejarlas
+irreconocibles conservando el nombre de un diseño que no era para esto. **Las
+funciones muertas se eliminaron** y se creó `bodega_bajas`.
+
+Migración: `009_mermas_regalos_sobrantes.sql`. Si no se ejecuta, el resto de
+bodega funciona igual y el botón de dar de baja queda deshabilitado con el aviso.
+
+El reporte de bodega trae una hoja **Mermas y sobrantes** cuyo total es la
+pérdida *real*: sumar las devoluciones y los ajustes daría una pérdida inflada.
 
 ## 5. Sustitución de productos — decidido: no construir por ahora
 

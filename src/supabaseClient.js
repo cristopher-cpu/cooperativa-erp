@@ -365,50 +365,17 @@ export async function deleteBodegaAssignment(id) {
   return !error;
 }
 
-export async function getInventory() {
-  const { data } = await supabase.from('inventory').select('*');
-  return data || [];
-}
+// Las funciones de las tablas `inventory` y `movements` se eliminaron el
+// 18-sep-2026: código muerto de un intento anterior de llevar inventario.
+// Verificado contra el respaldo antes de borrarlas — cero filas en ambas tablas
+// y ningún llamador en toda la aplicación.
+//
+// Se evaluó reaprovecharlas para las mermas de la etapa 7 y no convenía:
+// `movements` no tiene `period_id` —y acá todo se contabiliza por período— ni
+// campo de motivo, ni vínculo con el ítem de bodega del que se descuenta.
+// Habría que alterarlas hasta dejarlas irreconocibles conservando el nombre de
+// un diseño que no era para esto. Ver `bodega_bajas` en la migración 009.
 
-export async function getMovements() {
-  const { data } = await supabase
-    .from('movements')
-    .select('*')
-    .order('created_at', { ascending: false });
-  return data || [];
-}
-
-export async function addInventoryEntry(movement) {
-  const { data, error } = await supabase.from('movements').insert([movement]).select().single();
-  if (error) console.error('addInventoryEntry error:', error.message);
-  return data;
-}
-
-export async function updateInventory(productId, quantity) {
-  const { data: existing } = await supabase
-    .from('inventory')
-    .select('*')
-    .eq('product_id', productId)
-    .single();
-  if (existing) {
-    const { data, error } = await supabase
-      .from('inventory')
-      .update({ quantity })
-      .eq('product_id', productId)
-      .select()
-      .single();
-    if (error) console.error('updateInventory error:', error.message);
-    return data;
-  } else {
-    const { data, error } = await supabase
-      .from('inventory')
-      .insert([{ id: Date.now().toString(), product_id: productId, quantity }])
-      .select()
-      .single();
-    if (error) console.error('updateInventory (insert) error:', error.message);
-    return data;
-  }
-}
 
 // ─── PROVEEDORES ──────────────────────────────────────────────────────────────
 // Los proveedores dejaron de ser texto libre dentro de cada producto y pasaron a
@@ -862,4 +829,89 @@ export async function revertirImportacion(batchId) {
     }]);
   }
   return { revertidos, saltados };
+}
+
+// ─── BAJAS DE BODEGA: MERMAS, REGALOS Y SOBRANTES ────────────────────────────
+// Migración 009.
+
+export async function getBajas(periodId) {
+  const { data, error } = await supabase
+    .from('bodega_bajas')
+    .select('*')
+    .eq('period_id', periodId)
+    .order('created_at', { ascending: false });
+  // null cuando la tabla no existe: la pantalla tiene que poder decir "falta la
+  // migración" en vez de "no hay mermas", que es una afirmación distinta.
+  if (error) { console.error('getBajas error:', error.message); return null; }
+  return data || [];
+}
+
+// Registra la baja y, si el motivo cuesta plata, el egreso en el flujo de caja.
+//
+// El egreso va DESPUÉS de la baja, y si falla no se aborta: la baja es el hecho
+// —el producto ya no está— y el egreso es su consecuencia contable. Dejar el
+// stock mal por una tabla de caja que no existe sería peor. Se devuelve
+// `sinCaja` para que la pantalla lo diga en vez de callarlo.
+//
+// `cash_flow_id` queda guardado en la baja para poder deshacerla sin dejar un
+// egreso huérfano en el flujo.
+export async function addBaja(baja, { cuestaPlata, periodLabel } = {}) {
+  const cashFlowId = cuestaPlata ? 'baja-' + Date.now().toString(36) : null;
+
+  const { data, error } = await supabase
+    .from('bodega_bajas')
+    .insert([{ ...baja, cash_flow_id: cashFlowId }])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('addBaja error:', error.message);
+    return {
+      error: /relation|does not exist|schema cache/.test(error.message)
+        ? 'Falta ejecutar db/migrations/009_mermas_regalos_sobrantes.sql en Supabase.'
+        : error.message,
+    };
+  }
+
+  let sinCaja = false;
+  if (cuestaPlata && baja.amount > 0) {
+    const r = await supabase.from('cash_flow').insert([{
+      id: cashFlowId,
+      period_id: baja.period_id,
+      type: 'egreso',
+      description: 'Bodega · ' + baja.product_name + ' (' + baja.quantity + ' ' + (baja.unit || '') + ') — ' + baja.note,
+      amount: baja.amount,
+      date: new Date().toISOString().split('T')[0],
+      family_id: null,
+      family_name: null,
+    }]);
+    if (r.error) { console.error('addBaja (cash_flow) error:', r.error.message); sinCaja = true; }
+  }
+
+  return { baja: data, sinCaja };
+}
+
+// Deshacer. Devuelve el stock y borra el egreso que había generado, para que el
+// flujo de caja no quede afirmando una pérdida que se revirtió.
+export async function deleteBaja(baja) {
+  const { error } = await supabase.from('bodega_bajas').delete().eq('id', baja.id);
+  if (error) { console.error('deleteBaja error:', error.message); return { error: error.message }; }
+
+  if (baja.cash_flow_id) {
+    const r = await supabase.from('cash_flow').delete().eq('id', baja.cash_flow_id);
+    if (r.error) {
+      console.error('deleteBaja (cash_flow) error:', r.error.message);
+      // La baja ya no está; el egreso quedó. Se avisa en vez de callarlo, porque
+      // el flujo de caja va a mostrar una pérdida sin respaldo y alguien va a
+      // tener que borrarla a mano.
+      return { ok: true, egresoHuerfano: baja.cash_flow_id };
+    }
+  }
+  return { ok: true };
+}
+
+export async function getAllBajas() {
+  const { data, error } = await supabase.from('bodega_bajas').select('*').order('created_at', { ascending: true });
+  if (error) { console.error('getAllBajas error:', error.message); return []; }
+  return data || [];
 }

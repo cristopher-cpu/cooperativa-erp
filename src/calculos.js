@@ -639,3 +639,89 @@ export function puedeMarcarRetiro(pendientesFam) {
   }
   return { puede: true, advertencia: false, motivo: 'ok', noTrae: [], parcial: [] };
 }
+
+// ── Bajas de bodega: mermas, regalos y sobrantes ────────────────────────────
+//
+// Producto que salió de bodega sin venderse. El motivo no es una etiqueta
+// decorativa: decide si la salida cuesta plata y si aparece en el flujo de caja.
+//
+// Mezclar merma con regalo hace que la cooperativa parezca descuidada cuando en
+// realidad fue generosa, y al revés: esconde una merma real detrás de una
+// decisión. Son dos conversaciones distintas en la asamblea.
+export const MOTIVOS_BAJA = {
+  merma: {
+    label: 'Merma',
+    descripcion: 'Se echó a perder, se rompió o se venció',
+    ayuda: 'Pérdida involuntaria. Es lo que hay que medir para saber si conviene comprar menos.',
+    cuestaPlata: true,
+    color: '#c62828', bg: '#ffebee', ic: '🥀',
+  },
+  regalo: {
+    label: 'Regalo o donación',
+    descripcion: 'Se donó o se regaló',
+    ayuda: 'Pérdida deliberada, no un descuido. Se cuenta aparte de la merma a propósito.',
+    cuestaPlata: true,
+    color: '#6a1b9a', bg: '#f3e5f5', ic: '🎁',
+  },
+  consumo: {
+    label: 'Consumo de la cooperativa',
+    descripcion: 'Se usó en una actividad, capacitación u once',
+    ayuda: 'Sale del stock y es gasto, pero es gasto con propósito.',
+    cuestaPlata: true,
+    color: '#e65100', bg: '#fff3e0', ic: '🍵',
+  },
+  devolucion: {
+    label: 'Devolución al proveedor',
+    descripcion: 'Se le devolvió al proveedor',
+    ayuda: 'No es pérdida: la plata vuelve o nunca se pagó. No genera egreso.',
+    cuestaPlata: false,
+    color: '#1565c0', bg: '#e3f2fd', ic: '↩',
+  },
+  ajuste: {
+    label: 'Ajuste de inventario',
+    descripcion: 'La cuenta física no cuadraba con el sistema',
+    ayuda: 'No es un hecho del mundo, es una corrección de registro. Se anota para que el descalce quede visible en vez de desaparecer.',
+    cuestaPlata: false,
+    color: '#455a64', bg: '#eceff1', ic: '⚖',
+  },
+};
+
+export const bajaCuestaPlata = (reason) => !!(MOTIVOS_BAJA[reason] && MOTIVOS_BAJA[reason].cuestaPlata);
+
+// Cuánto queda disponible de un ítem de bodega.
+//
+// Tres cosas lo bajan y hay que restar las tres: lo asignado a familias, lo que
+// se dio de baja, y nada más. Antes solo se restaban las asignaciones, así que
+// un producto que se echó a perder seguía apareciendo como disponible para
+// reservar — y alguien lo iba a reservar.
+export function disponibleEnBodega({ item, asignaciones = [], bajas = [] }) {
+  if (!item) return 0;
+  const total = Number(item.quantity) || 0;
+  const asignado = asignaciones
+    .filter(a => String(a.bodega_id) === String(item.id))
+    .reduce((s, a) => s + (Number(a.quantity) || 0), 0);
+  const dadoDeBaja = bajas
+    .filter(b => String(b.bodega_id) === String(item.id))
+    .reduce((s, b) => s + (Number(b.quantity) || 0), 0);
+  return Math.max(0, total - asignado - dadoDeBaja);
+}
+
+// Resumen de las bajas de un período, por motivo. Lo usa el flujo de caja y el
+// reporte de bodega.
+export function resumenBajas(bajas = []) {
+  const porMotivo = {};
+  Object.keys(MOTIVOS_BAJA).forEach(m => { porMotivo[m] = { cantidad: 0, monto: 0, n: 0 }; });
+
+  let perdida = 0, sinCosto = 0;
+  bajas.forEach(b => {
+    const m = porMotivo[b.reason];
+    if (!m) return;
+    m.n++;
+    m.cantidad += Number(b.quantity) || 0;
+    m.monto += Number(b.amount) || 0;
+    if (bajaCuestaPlata(b.reason)) perdida += Number(b.amount) || 0;
+    else sinCosto += Number(b.amount) || 0;
+  });
+
+  return { porMotivo, perdida, sinCosto, total: perdida + sinCosto, n: bajas.length };
+}

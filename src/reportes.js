@@ -16,7 +16,7 @@
 // período cerrado da exactamente el mismo detalle que el activo.
 
 import {
-  clp, parseItems, cuentaDeFamilia, ajustesPorFamilia,
+  clp, parseItems, cuentaDeFamilia, ajustesPorFamilia, resumenBajas, MOTIVOS_BAJA,
 } from './calculos';
 import { rolesDe, PERFILES } from './perfiles';
 
@@ -300,19 +300,23 @@ export function reporteAjustes({ period, families, ajustes, products, providers 
 }
 
 // ── 5. Stock de bodega ──────────────────────────────────────────────────────
-export function reporteBodega({ period, families, bodega = [], asignaciones = [] }) {
+export function reporteBodega({ period, families, bodega = [], asignaciones = [], bajas = [] }) {
   const famPorId = new Map((families || []).map(f => [f.id, f]));
 
-  const asignadoDe = (itemId) => asignaciones
-    .filter(a => String(a.bodega_item_id) === String(itemId))
-    .reduce((s, a) => s + (Number(a.quantity) || 0), 0);
+  const sumaDe = (lista, itemId) => lista
+    .filter(x => String(x.bodega_id) === String(itemId))
+    .reduce((s, x) => s + (Number(x.quantity) || 0), 0);
 
   const filas = bodega.map(it => {
-    const asignado = asignadoDe(it.id);
-    const disponible = (Number(it.quantity) || 0) - asignado;
+    const asignado = sumaDe(asignaciones, it.id);
+    // Lo dado de baja también resta. Un producto que se echó a perder no está
+    // disponible, y contarlo como tal es el error que hace que alguien lo
+    // reserve.
+    const deBaja = sumaDe(bajas, it.id);
+    const disponible = (Number(it.quantity) || 0) - asignado - deBaja;
     return [
       it.product_name, it.provider || '', it.unit || '',
-      Number(it.quantity) || 0, asignado, disponible,
+      Number(it.quantity) || 0, asignado, deBaja, disponible,
       Number(it.price) || 0,
       (Number(it.price) || 0) * (Number(it.quantity) || 0),
       (Number(it.price) || 0) * disponible,
@@ -321,7 +325,7 @@ export function reporteBodega({ period, families, bodega = [], asignaciones = []
   });
 
   const asignadas = asignaciones.map(a => {
-    const it = bodega.find(b => String(b.id) === String(a.bodega_item_id));
+    const it = bodega.find(b => String(b.id) === String(a.bodega_id));
     return [
       (famPorId.get(a.family_id) || {}).name || a.family_id,
       (it && it.product_name) || a.product_name || '',
@@ -331,12 +335,33 @@ export function reporteBodega({ period, families, bodega = [], asignaciones = []
     ];
   }).sort((x, y) => String(x[0]).localeCompare(String(y[0])));
 
-  return [
+  // Las bajas. Merma y regalo van en la misma hoja pero con el motivo a la
+  // vista, y la columna que dice si costó plata separa la pérdida real de lo
+  // que solo salió del stock.
+  const res = resumenBajas(bajas);
+  const filasBajas = bajas.map(b => {
+    const cfg = MOTIVOS_BAJA[b.reason] || {};
+    return [
+      cfg.label || b.reason,
+      b.product_name,
+      b.unit || '',
+      Number(b.quantity) || 0,
+      Number(b.unit_price) || 0,
+      Number(b.amount) || 0,
+      cfg.cuestaPlata ? 'Sí' : 'No',
+      b.note || '',
+      b.created_by_name || '',
+      fechaHora(b.created_at),
+    ];
+  }).sort((x, y) => String(x[0]).localeCompare(String(y[0])) || String(x[1]).localeCompare(String(y[1])));
+
+  const hojas = [
     {
       nombre: 'Stock en bodega',
       columnas: [
         { t: 'Producto', w: 32 }, { t: 'Proveedor', w: 22 }, { t: 'Formato', w: 11 },
-        { t: 'En bodega', w: 11 }, { t: 'Asignado', w: 11 }, { t: 'Disponible', w: 11 },
+        { t: 'En bodega', w: 11 }, { t: 'Asignado', w: 11 }, { t: 'De baja', w: 10 },
+        { t: 'Disponible', w: 11 },
         { t: 'Precio unitario', w: 14, clp: true }, { t: 'Valor total', w: 14, clp: true },
         { t: 'Valor disponible', w: 15, clp: true }, { t: 'Ingresado', w: 13 },
       ],
@@ -345,9 +370,10 @@ export function reporteBodega({ period, families, bodega = [], asignaciones = []
                 filas.reduce((s, r) => s + r[3], 0),
                 filas.reduce((s, r) => s + r[4], 0),
                 filas.reduce((s, r) => s + r[5], 0),
+                filas.reduce((s, r) => s + r[6], 0),
                 null,
-                filas.reduce((s, r) => s + r[7], 0),
-                filas.reduce((s, r) => s + r[8], 0), ''],
+                filas.reduce((s, r) => s + r[8], 0),
+                filas.reduce((s, r) => s + r[9], 0), ''],
     },
     {
       nombre: 'Asignaciones',
@@ -359,6 +385,26 @@ export function reporteBodega({ period, families, bodega = [], asignaciones = []
       totales: ['TOTAL (' + asignadas.length + ')', '', null, asignadas.reduce((s, r) => s + r[3], 0), ''],
     },
   ];
+
+  if (filasBajas.length) {
+    hojas.push({
+      nombre: 'Mermas y sobrantes',
+      columnas: [
+        { t: 'Motivo', w: 24 }, { t: 'Producto', w: 32 }, { t: 'Formato', w: 11 },
+        { t: 'Cantidad', w: 10 }, { t: 'Precio unitario', w: 14, clp: true },
+        { t: 'Valor', w: 14, clp: true }, { t: '¿Es pérdida?', w: 13 },
+        { t: 'Qué pasó', w: 44 }, { t: 'Lo anotó', w: 22 }, { t: 'Cuándo', w: 18 },
+      ],
+      filas: filasBajas,
+      // El total que importa es la pérdida real, no la suma de todo: las
+      // devoluciones y los ajustes de inventario salieron del stock pero no
+      // costaron plata, y sumarlos daría una pérdida inflada.
+      totales: ['PÉRDIDA REAL (merma + regalo + consumo)', '', '', null, null,
+                res.perdida, '', 'Sin costo: ' + clp(res.sinCosto), '', ''],
+    });
+  }
+
+  return hojas;
 }
 
 // ── 6. Las familias ─────────────────────────────────────────────────────────
@@ -518,7 +564,7 @@ export const REPORTES = [
   {
     id: 'bodega',
     titulo: 'Stock de bodega',
-    descripcion: 'Qué hay en bodega, cuánto está asignado y cuánto queda disponible.',
+    descripcion: 'Qué hay en bodega, cuánto está asignado, cuánto se dio de baja por merma o regalo, y cuánto queda disponible.',
     ic: '🏪',
     necesita: ['bodega'],
     hojas: (d) => reporteBodega(d),
