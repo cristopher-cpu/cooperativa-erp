@@ -488,3 +488,154 @@ export const ESTADOS_CONFIRMACION = {
   parcial:          { txt: 'El proveedor trae solo una parte', corto: 'Parcial', color: '#e65100', bg: '#fff3e0', ic: '≈' },
   no_disponible:    { txt: 'El proveedor no lo trae', corto: 'No lo trae', color: '#c62828', bg: '#ffebee', ic: '✕' },
 };
+
+// ── Cargos fijos del período ────────────────────────────────────────────────
+//
+// El cargo fijo era UN número igual para todas. Ahora son varios, con nombre, y
+// una familia puede estar eximida de alguno. Eso convierte "el cargo" en una
+// pregunta con parámetro: cuánto le corresponde a ESTA familia.
+//
+// `construirCargos` devuelve un objeto con todo lo que las pantallas necesitan,
+// para que ninguna vuelva a sumar cargos por su cuenta. Antes el cargo viajaba
+// como escalar por veinte lugares; si cada uno decidiera aparte si aplicar una
+// exención, dos pantallas mostrarían cuentas distintas de la misma familia — que
+// es exactamente lo que este archivo existe para impedir.
+//
+// Degrada solo: si la migración 007 no corrió, `charges` llega vacío y se usa
+// `periods.fixed_charge` como un único cargo sin nombre propio. Nadie ve un
+// cargo de cero por una tabla que todavía no existe.
+export function construirCargos({ charges = null, exemptions = [], period = null } = {}) {
+  const legacy = Number(period?.fixed_charge) || 0;
+  const faltaMigracion = charges === null;
+
+  // El respaldo solo aplica si la tabla NO existe. Si existe y está vacía, el
+  // período no cobra cargos y punto: resucitar `fixed_charge` ahí volvería a
+  // cobrar un cargo que alguien acaba de borrar a propósito.
+  const lista = faltaMigracion
+    ? (legacy !== 0
+        ? [{ id: '__legacy__', name: 'Cargo fijo', amount: legacy, note: null, sort: 0, legacy: true }]
+        : [])
+    : charges.slice().sort((a, b) => (a.sort || 0) - (b.sort || 0) || a.name.localeCompare(b.name));
+
+  // charge_id → Map<family_id, exención>. Un cargo legacy no se puede eximir:
+  // no existe como fila, así que no hay a qué colgar la exención.
+  const porCargo = new Map();
+  exemptions.forEach(e => {
+    if (!porCargo.has(e.charge_id)) porCargo.set(e.charge_id, new Map());
+    porCargo.get(e.charge_id).set(e.family_id, e);
+  });
+
+  // Cuánto se le cobra a una familia sin ninguna exención. Es lo que
+  // `fixed_charge` significaba antes, y lo que corresponde mostrar en los
+  // totales agregados donde no hay una familia concreta a la vista.
+  const total = lista.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+
+  // El desglose de una familia: cada cargo con si le aplica y por qué no.
+  const desgloseDe = (familyId) => lista.map(c => {
+    const ex = porCargo.get(c.id)?.get(familyId) || null;
+    return { ...c, amount: Number(c.amount) || 0, exenta: !!ex, exencion: ex };
+  });
+
+  const de = (familyId) => desgloseDe(familyId)
+    .filter(c => !c.exenta)
+    .reduce((s, c) => s + c.amount, 0);
+
+  const exencionesDe = (familyId) => desgloseDe(familyId).filter(c => c.exenta);
+
+  return {
+    lista,
+    total,
+    de,
+    desgloseDe,
+    exencionesDe,
+    // Cuántas familias están eximidas de este cargo, para la vista de cargos.
+    exentasDe: (chargeId) => porCargo.get(chargeId)?.size || 0,
+    exenciones: exemptions,
+    faltaMigracion,
+    editable: !faltaMigracion,
+
+    // `periods.fixed_charge` lo mantiene sincronizado un trigger, así que si no
+    // coincide con la suma de los cargos es que algo se escribió a medias —el
+    // caso concreto es una copia de cargos fallida al crear el período, que deja
+    // el total puesto y ninguna fila. Vale la pena decirlo en voz alta: la
+    // alternativa es cobrar $0 de cargos sin que nadie se entere.
+    descalzado: (!faltaMigracion && legacy !== total) ? { columna: legacy, cargos: total } : null,
+  };
+}
+
+// ── Lo que los proveedores dijeron y todavía nadie aplicó ───────────────────
+//
+// `derivarDeConfirmacion` traduce UNA orden de compra. Esto recorre todas las
+// del período, descarta lo que ya está registrado y devuelve lo que sigue
+// pendiente, indexado por familia.
+//
+// Vive acá y no en la pestaña de Faltantes porque Retiros necesita la misma
+// respuesta: marcar un retiro sin haber aplicado lo que el proveedor avisó que
+// no traía es cobrarle a la familia un producto que nunca existió. Cuando el
+// cálculo vivía dentro de un componente, la otra pantalla no podía verlo.
+export function pendientesDeConfirmacion({ ordenes = [], sealedOrders = [], period = null, productos = [], ajustes = [] }) {
+  if (!period) return { pendientes: [], aRepartir: [], porFamilia: new Map() };
+
+  const automaticos = [];
+  const reparto = [];
+  ordenes.filter(o => o.status === 'confirmada').forEach(orden => {
+    const d = derivarDeConfirmacion({ orden, sealedOrders, period, productos });
+    automaticos.push(...d.automaticos);
+    reparto.push(...d.aRepartir);
+  });
+
+  // Lo ya registrado no se vuelve a proponer. El índice único de la migración
+  // 004 lo rechazaría igual, pero proponerlo sería ofrecerle a la comisión un
+  // botón que va a fallar.
+  const yaHay = new Set(
+    ajustes.filter(a => a.type === 'no_confirmado').map(a => a.family_id + '|' + a.product_id)
+  );
+  const pendientes = automaticos.filter(a => !yaHay.has(a.family_id + '|' + a.product_id));
+
+  // Indexado por familia: es como lo lee Retiros, familia por familia en la
+  // puerta de la bodega.
+  const porFamilia = new Map();
+  const anota = (familyId, clave, valor) => {
+    if (!porFamilia.has(familyId)) porFamilia.set(familyId, { noTrae: [], parcial: [] });
+    porFamilia.get(familyId)[clave].push(valor);
+  };
+  pendientes.forEach(p => anota(p.family_id, 'noTrae', p));
+  reparto.forEach(r => r.familias.forEach(f => anota(f.family_id, 'parcial', { ...r, suQty: f.qty })));
+
+  return { pendientes, aRepartir: reparto, porFamilia };
+}
+
+// ¿Se puede marcar el retiro de esta familia?
+//
+// Bloquea solo el caso inequívoco: el proveedor dijo que NO LO TRAE, nadie lo
+// va a recibir, y el descuento se aplica con un clic desde la misma fila. No
+// hay decisión que tomar, solo un paso que se saltó.
+//
+// Una entrega PARCIAL no bloquea, aunque también esté sin resolver: quién se
+// queda sin su parte lo decide la cooperativa, y esa conversación no puede
+// ocurrir con la fila de familias esperando en la puerta. Se advierte y se
+// deja pasar — el retiro es un hecho físico, y negarlo en la pantalla no
+// impide que la caja se entregue.
+export function puedeMarcarRetiro(pendientesFam) {
+  const p = pendientesFam || { noTrae: [], parcial: [] };
+  if (p.noTrae.length > 0) {
+    return {
+      puede: false,
+      motivo: 'no_confirmados_sin_aplicar',
+      noTrae: p.noTrae,
+      parcial: p.parcial,
+      texto: p.noTrae.length === 1
+        ? 'El proveedor avisó que no trae 1 producto de este pedido y el descuento todavía no se aplicó.'
+        : 'El proveedor avisó que no trae ' + p.noTrae.length + ' productos de este pedido y los descuentos todavía no se aplicaron.',
+    };
+  }
+  if (p.parcial.length > 0) {
+    return {
+      puede: true, advertencia: true, motivo: 'parciales_sin_repartir',
+      noTrae: [], parcial: p.parcial,
+      texto: 'Hay ' + p.parcial.length + ' producto' + (p.parcial.length === 1 ? '' : 's') +
+        ' del que el proveedor trae solo una parte. Repartir el faltante es decisión de la cooperativa: regístralo en Faltantes y Extras cuando se resuelva.',
+    };
+  }
+  return { puede: true, advertencia: false, motivo: 'ok', noTrae: [], parcial: [] };
+}

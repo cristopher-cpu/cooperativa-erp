@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   getFamilies, getProducts, getSealedOrders, getPeriod, getProviders, loginFamily,
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
   getBodega, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, getAdjustments,
-  getPurchaseOrders
+  getPurchaseOrders, getPeriodCharges, getChargeExemptions
 } from './supabaseClient';
 import {
   TIPOS, clp, cuentaDeFamilia, parseItems, estadoPedidos, estadoConfirmacionPorProducto,
-  ESTADOS_CONFIRMACION,
+  ESTADOS_CONFIRMACION, construirCargos,
 } from './calculos';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
@@ -15,7 +15,7 @@ import { AdminProveedores } from './AdminProveedores';
 import { AdminConsolidado } from './AdminConsolidado';
 import { AdminAjustes } from './AdminAjustes';
 import { FamiliaAjustes } from './FamiliaAjustes';
-import { esDelPanel, tabsVisibles, etiquetasDe, esAdmin } from './perfiles';
+import { esDelPanel, tabsVisibles, etiquetasDe, esAdmin, tieneRol } from './perfiles';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -72,7 +72,31 @@ function App() {
   const login = u => setUser(u);
   const logout = () => setUser(null);
 
-  const cargo = period?.fixed_charge ?? 4000;
+  // ── Cargos fijos del período ──────────────────────────────────────────────
+  //
+  // El cargo era un escalar (`period.fixed_charge`) que viajaba a veinte
+  // lugares. Ahora son varios cargos con nombre y una familia puede estar
+  // eximida de alguno, así que "el cargo" pasó a ser una pregunta con
+  // parámetro: cuánto le corresponde a ESTA familia. `construirCargos` responde
+  // las dos —el total sin exenciones y el de cada familia— y se pasa el objeto
+  // completo, no el número, para que ninguna pantalla vuelva a sumar por su
+  // cuenta y muestre una cifra distinta de la de al lado.
+  const [charges, setCharges] = useState(null);       // null = falta la migración 007
+  const [exemptions, setExemptions] = useState([]);
+
+  const cargarCargos = useCallback(async () => {
+    if (!period?.id) { setCharges(null); setExemptions([]); return; }
+    const [c, e] = await Promise.all([getPeriodCharges(period.id), getChargeExemptions(period.id)]);
+    setCharges(c);
+    setExemptions(e || []);
+  }, [period?.id]);
+
+  useEffect(() => { cargarCargos(); }, [cargarCargos]);
+
+  const cargos = useMemo(
+    () => construirCargos({ charges, exemptions, period }),
+    [charges, exemptions, period]
+  );
 
   const sealOrderLocal = async (fid, items, total) => {
     if (!period) return;
@@ -149,7 +173,8 @@ function App() {
         setSealed={setSealed}
         period={period}
         setPeriod={setPeriod}
-        cargo={cargo}
+        cargos={cargos}
+        recargarCargos={cargarCargos}
         logout={logout}
         carts={carts}
         setCarts={setCarts}
@@ -173,7 +198,7 @@ function App() {
       carts={carts}
       setCarts={setCarts}
       period={period}
-      cargo={cargo}
+      cargos={cargos}
       logout={logout}
     />
   );
@@ -186,8 +211,11 @@ function Welcome({ families, onLogin, period }) {
   const [pin, setPin] = useState('');
   const [pinErr, setPinErr] = useState('');
 
-  const admins = families.filter(f => f.role === 'admin');
-  const fams = families.filter(f => f.role === 'familia');
+  // Por perfiles, no por `role`: una familia con Retiro o Balance Contable
+  // tiene `role === 'familia'` (se mantiene sincronizado por compatibilidad) y
+  // aparecía entre las familias comunes, sin señal de que entra al panel.
+  const admins = families.filter(f => esDelPanel(f));
+  const fams = families.filter(f => !esDelPanel(f));
 
   const [verificando, setVerificando] = useState(false);
 
@@ -207,7 +235,10 @@ function Welcome({ families, onLogin, period }) {
   };
 
   if (loginFam) {
-    const isAdmin = loginFam.role === 'admin';
+    // Quien entra al panel, no solo Admin: /api/login mide la exigencia de PIN
+    // por lo que la cuenta puede VER, y esta pantalla tiene que anticipar lo
+    // mismo o el aviso no coincide con lo que después pasa.
+    const isAdmin = esDelPanel(loginFam);
     const color = isAdmin ? '#1565c0' : '#4CAF50';
     return (
       <div style={{ background: 'linear-gradient(160deg, #f0f7f0 0%, #e6f2e6 55%, #e0f0ea 100%)', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
@@ -215,7 +246,15 @@ function Welcome({ families, onLogin, period }) {
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div style={{ width: 64, height: 64, borderRadius: '50%', background: color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', fontWeight: 700, margin: '0 auto 12px' }}>{loginFam.initials}</div>
             <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 6px', color: '#222' }}>{loginFam.name}</h2>
-            {isAdmin && <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: '#1565c0', color: 'white' }}>ADMINISTRADOR</span>}
+            {isAdmin && (
+              <span style={{ display: 'inline-flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                {etiquetasDe(loginFam).map(e => (
+                  <span key={e.id} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: e.color, color: 'white' }}>
+                    {e.ic} {e.corto}
+                  </span>
+                ))}
+              </span>
+            )}
           </div>
 
           {loginFam.pin_set_at ? (
@@ -243,7 +282,7 @@ function Welcome({ families, onLogin, period }) {
               <div style={{ padding: '10px', background: isAdmin ? '#ffebee' : '#f5f5f5', borderRadius: '8px', marginBottom: '1rem', textAlign: 'center' }}>
                 <p style={{ fontSize: '12px', color: isAdmin ? '#c62828' : '#aaa', margin: 0, fontWeight: isAdmin ? 600 : 400 }}>
                   {isAdmin
-                    ? 'Esta cuenta de administrador no tiene PIN. Por seguridad no puede entrar hasta que se le asigne uno.'
+                    ? 'Esta cuenta tiene acceso al panel de la cooperativa y no tiene PIN. Por seguridad no puede entrar hasta que Administración le asigne uno.'
                     : 'Sin PIN configurado — acceso directo'}
                 </p>
               </div>
@@ -274,20 +313,30 @@ function Welcome({ families, onLogin, period }) {
         <p style={{ color: '#666', margin: 0, fontSize: '14px' }}>{period?.label} · {period?.month}</p>
       </div>
 
-      <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Administración</h2>
-      <div className="stagger-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
-        {admins.map(f => (
-          <button key={f.id} onClick={() => selectFam(f)}
-            style={{ padding: '1.25rem', border: '1.5px solid #2196F3', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(33,150,243,0.08)', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#1565c0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
-            <div>
-              <strong style={{ fontSize: '15px', color: '#1565c0', display: 'block' }}>{f.name}</strong>
-              <span style={{ fontSize: '10px', color: '#1976d2', fontWeight: 600 }}>ADMINISTRADOR</span>
-              {f.pin_set_at && <span style={{ marginLeft: "6px", fontSize: "9px", color: "#aaa" }}>🔒</span>}
-            </div>
-          </button>
-        ))}
-      </div>
+      {admins.length > 0 && (
+        <>
+          <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Comisiones</h2>
+          <div className="stagger-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
+            {admins.map(f => (
+              <button key={f.id} onClick={() => selectFam(f)}
+                style={{ padding: '1.25rem', border: '1.5px solid #2196F3', borderRadius: '10px', background: 'white', cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(33,150,243,0.08)', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#1565c0', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ fontSize: '15px', color: '#1565c0', display: 'block' }}>{f.name}</strong>
+                  <span style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
+                    {etiquetasDe(f).map(e => (
+                      <span key={e.id} style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '8px', background: e.bg, color: e.color }}>
+                        {e.ic} {e.corto}
+                      </span>
+                    ))}
+                  </span>
+                  {f.pin_set_at && <span style={{ fontSize: "9px", color: "#aaa" }}>🔒</span>}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <h2 style={{ fontSize: '11px', fontWeight: 600, color: '#888', textTransform: 'uppercase', marginBottom: '0.75rem', letterSpacing: '0.08em' }}>Familias ({fams.length})</h2>
       <div className="stagger-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
@@ -313,7 +362,7 @@ function Welcome({ families, onLogin, period }) {
 
 // ─── FAMILY APP ───────────────────────────────────────────────────────────────
 
-function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargo, logout }) {
+function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargos, logout }) {
   const [tab, setTab] = useState('catalog');
   const [cat, setCat] = useState('all');
   const [srch, setSrch] = useState('');
@@ -349,6 +398,11 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   const sub = id => setCart(p => ({ ...p, [id]: Math.max(0, (p[id] || 0) - 1) }));
 
   const currentUser = (families && families.find(f => f.id === user.id)) || user;
+
+  // Cuánto de cargo fijo le toca a ESTA familia: el total del período menos los
+  // cargos de los que está eximida.
+  const cargo = cargos.de(currentUser.id);
+  const misCargos = cargos.desgloseDe(currentUser.id);
 
   const items = useMemo(() =>
     Object.entries(cart).filter(([, q]) => q > 0).map(([id, qty]) => {
@@ -717,7 +771,13 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                   <p style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Resumen del pedido</p>
                   {[
                     { l: 'Subtotal productos', v: cuenta.subtotal, mostrar: true },
-                    { l: 'Cargo fijo', v: cuenta.cargo, mostrar: cuenta.cargo > 0 },
+                    // Cada cargo con su nombre, no un total anónimo: un cargo
+                    // que la familia no puede explicar es un cargo que se
+                    // discute después, por WhatsApp y sin la cifra a la vista.
+                    ...misCargos.filter(c => !c.exenta).map(c => ({ l: c.name, v: c.amount, mostrar: c.amount !== 0 })),
+                    ...misCargos.filter(c => c.exenta).map(c => ({
+                      l: c.name + ' — estás eximida', v: 0, mostrar: true,
+                    })),
                     { l: '📭 No confirmados por el proveedor', v: cuenta.noConfirmados, mostrar: cuenta.noConfirmados !== 0 },
                     { l: '❗ Faltantes en tu caja', v: cuenta.faltantes, mostrar: cuenta.faltantes !== 0 },
                     { l: '➕ Extras', v: cuenta.extras, mostrar: cuenta.extras !== 0 },
@@ -784,8 +844,20 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
             ) : (
               <div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '1rem' }}>
-                  {[{ l: 'Subtotal', v: '$' + total.toLocaleString('es-CL') }, { l: 'Cargo fijo', v: '$' + cargo.toLocaleString('es-CL') }, { l: 'Total', v: '$' + (total + cargo).toLocaleString('es-CL') }].map(m => (
-                    <div key={m.l} style={{ padding: '0.9rem', background: 'white', borderRadius: '8px', textAlign: 'center', border: '1px solid #dde8dd' }}>
+                  {[
+                    { l: 'Subtotal', v: '$' + total.toLocaleString('es-CL') },
+                    {
+                      l: misCargos.filter(c => !c.exenta).length === 1
+                        ? misCargos.find(c => !c.exenta).name
+                        : 'Cargos fijos',
+                      v: '$' + cargo.toLocaleString('es-CL'),
+                      // El desglose en el title: en tres tarjetas angostas no
+                      // cabe, y el resumen de abajo ya lo lista completo.
+                      ay: misCargos.map(c => c.name + (c.exenta ? ' (exenta)' : ': $' + c.amount.toLocaleString('es-CL'))).join(' · '),
+                    },
+                    { l: 'Total', v: '$' + (total + cargo).toLocaleString('es-CL') },
+                  ].map(m => (
+                    <div key={m.l} title={m.ay || undefined} style={{ padding: '0.9rem', background: 'white', borderRadius: '8px', textAlign: 'center', border: '1px solid #dde8dd' }}>
                       <p style={{ fontSize: '10px', color: '#888', margin: 0 }}>{m.l}</p>
                       <p style={{ fontSize: '14px', fontWeight: 700, margin: '5px 0 0', color: '#2d5a2d' }}>{m.v}</p>
                     </div>
@@ -910,14 +982,14 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
 
         {/* MI SALDO */}
         {tab === 'balance' && (
-          <SaldoFamilia user={currentUser} ord={ord} cargo={cargo} period={period} ajustes={ajustes} />
+          <SaldoFamilia user={currentUser} ord={ord} cargo={cargo} misCargos={misCargos} period={period} ajustes={ajustes} />
         )}
       </div>
     </div>
   );
 }
 
-function SaldoFamilia({ user, ord, cargo, period, ajustes = [] }) {
+function SaldoFamilia({ user, ord, cargo, misCargos = [], period, ajustes = [] }) {
   const saldo = user.balance || 0;
   const cuenta = cuentaDeFamilia({ ord, ajustes, cargo, saldo });
   const totalAPagar = cuenta.aPagar;
@@ -950,10 +1022,18 @@ function SaldoFamilia({ user, ord, cargo, period, ajustes = [] }) {
                 <span style={{ fontSize: '13px', color: '#555' }}>Subtotal productos</span>
                 <span style={{ fontSize: '13px', fontWeight: 500 }}>${ord.total.toLocaleString('es-CL')}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f0f7f0' }}>
-                <span style={{ fontSize: '13px', color: '#555' }}>Cargo fijo</span>
-                <span style={{ fontSize: '13px', fontWeight: 500 }}>${cargo.toLocaleString('es-CL')}</span>
-              </div>
+              {misCargos.map(c => (
+                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f0f7f0' }}>
+                  <span style={{ fontSize: '13px', color: c.exenta ? '#aaa' : '#555' }}>
+                    {c.name}
+                    {c.note && <span style={{ fontSize: '11px', color: '#bbb' }}> · {c.note}</span>}
+                    {c.exenta && <span style={{ fontSize: '11px', color: '#2e7d32', fontWeight: 600 }}> · estás eximida</span>}
+                  </span>
+                  <span style={{ fontSize: '13px', fontWeight: 500, color: c.exenta ? '#aaa' : '#333', textDecoration: c.exenta ? 'line-through' : 'none' }}>
+                    ${Number(c.amount).toLocaleString('es-CL')}
+                  </span>
+                </div>
+              ))}
               {[
                 { l: '📭 No confirmados por el proveedor', v: cuenta.noConfirmados },
                 { l: '❗ Faltantes en tu caja', v: cuenta.faltantes },
@@ -1002,10 +1082,19 @@ function SaldoFamilia({ user, ord, cargo, period, ajustes = [] }) {
 
 // ─── ADMIN APP ────────────────────────────────────────────────────────────────
 
-function AdminApp({ user, families, setFamilies, products, setProducts, providers, setProviders, sealed, setSealed, period, setPeriod, cargo, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
+function AdminApp({ user, families, setFamilies, products, setProducts, providers, setProviders, sealed, setSealed, period, setPeriod, cargos, recargarCargos, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
   const [tab, setTab] = useState('dashboard');
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
+
+  // OJO: esto excluye a las familias administradoras, que también piden. Es la
+  // deuda técnica anotada en docs/FASE-2.md §8 — arreglarla cambia a quién se le
+  // cobra plata al cerrar el período, y esa decisión es de la cooperativa.
   const na = families.filter(f => f.role === 'familia');
+
+  // Eximir a una familia de un cargo mueve plata de la cooperativa. La
+  // cooperativa pidió que lo decidan Administración y Balance Contable; los
+  // demás perfiles ven las exenciones pero no las conceden ni las quitan.
+  const puedeEximir = tieneRol(user, 'admin') || tieneRol(user, 'contable');
 
   const todasLasTabs = [
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
@@ -1053,7 +1142,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
           carts={carts}
           setCarts={setCarts}
           period={period}
-          cargo={cargo}
+          cargos={cargos}
           logout={() => setHacerPedidoFam(null)}
         />
       </div>
@@ -1101,26 +1190,26 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
       </div>
 
       <div style={{ padding: '1rem' }} className="tab-panel" key={tabActiva}>
-        {tabActiva === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargo={cargo} setTab={setTab} period={period} />}
+        {tabActiva === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargos={cargos} setTab={setTab} period={period} />}
         {tabActiva === 'analitica' && <AdminAnalytics families={families} products={products} />}
-        {tabActiva === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargo={cargo} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
+        {tabActiva === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargos={cargos} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
         {tabActiva === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} user={user} />}
-        {tabActiva === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargo={cargo} setSealed={setSealed} />}
-        {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargo={cargo} />}
-        {tabActiva === 'flujo' && <AdminFlujoCaja period={period} setPeriod={setPeriod} cargo={cargo} families={families} setFamilies={setFamilies} />}
+        {tabActiva === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargos={cargos} setSealed={setSealed} period={period} products={products} currentAdmin={user} />}
+        {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargos={cargos} />}
+        {tabActiva === 'flujo' && <AdminFlujoCaja period={period} cargos={cargos} recargarCargos={recargarCargos} families={families} setFamilies={setFamilies} sealed={sealed} currentAdmin={user} puedeEximir={puedeEximir} />}
         {tabActiva === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} />}
         {tabActiva === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
         {tabActiva === 'proveedores' && <AdminProveedores providers={providers} setProviders={setProviders} products={products} setProducts={setProducts} />}
         {tabActiva === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}
-        {tabActiva === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargo={cargo} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
-        {tabActiva === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargo={cargo} currentAdmin={user} />}
+        {tabActiva === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargos={cargos} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
+        {tabActiva === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargos={cargos} recargarCargos={recargarCargos} currentAdmin={user} />}
         {tabActiva === 'actividad' && <AdminLogs />}
       </div>
     </div>
   );
 }
 
-function AdminSaldos({ families, sealed, cargo, setFamilies, updateFamilyBalance }) {
+function AdminSaldos({ families, sealed, cargos, setFamilies, updateFamilyBalance }) {
   const [editId, setEditId] = useState(null);
   const [editVal, setEditVal] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1151,7 +1240,7 @@ function AdminSaldos({ families, sealed, cargo, setFamilies, updateFamilyBalance
 
       {families.map(f => {
         const ord = sealed[f.id];
-        const totalPedido = ord ? ord.total + cargo : 0;
+        const totalPedido = ord ? ord.total + cargos.de(f.id) : 0;
         return (
           <div key={f.id} style={{ padding: '1rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

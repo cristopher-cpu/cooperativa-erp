@@ -57,12 +57,41 @@ async function soportaPin() {
 }
 
 // Lo que se devuelve al navegador. Nunca pin ni pin_hash.
+//
+// `roles` tiene que viajar. Se entra con lo que devuelve el servidor y no con la
+// fila que el navegador ya tenía, así que lo que no esté acá el usuario no lo
+// tiene: mientras faltó, asignarle Retiro o Balance Contable a una familia
+// escribía la base y cambiaba el panel, pero esa familia seguía entrando a la
+// vista de familia. `rolesDe()` caía al respaldo de `role`, que solo distingue
+// 'admin' de 'familia' y no sabe nada de las otras cuatro comisiones.
+//
+// Antes de la migración 005 la columna no existe: se devuelve undefined y el
+// respaldo de `rolesDe()` hace su trabajo, que es justamente para lo que está.
 function familiaPublica(f) {
   return {
     id: f.id, name: f.name, initials: f.initials, role: f.role,
+    roles: Array.isArray(f.roles) && f.roles.length ? f.roles : undefined,
     balance: f.balance, email: f.email, email2: f.email2,
     tienePin: !!f.pin_hash,
   };
+}
+
+// ¿Esta familia entra al panel de administración?
+//
+// No alcanza con `role === 'admin'`. `role` se mantiene sincronizado en 'admin'
+// o 'familia' por compatibilidad, así que una familia con Balance Contable o
+// Retiro lo tiene en 'familia' y aun así ve saldos y flujo de caja de toda la
+// cooperativa. La exigencia de PIN se mide por lo que la cuenta PUEDE VER, no
+// por la etiqueta que le quedó de cuando los roles eran uno solo.
+//
+// Duplica a propósito la lógica de `esDelPanel` en src/perfiles.js: ese archivo
+// es del bundle de React y aquí no se puede importar. Si cambian los perfiles,
+// hay que tocar los dos — el comentario está para que se note.
+function entraAlPanel(f) {
+  const roles = Array.isArray(f.roles) && f.roles.length
+    ? f.roles
+    : (f.role === 'admin' ? ['admin', 'familia'] : ['familia']);
+  return roles.some(r => r !== 'familia');
 }
 
 module.exports = async (req, res) => {
@@ -85,7 +114,7 @@ module.exports = async (req, res) => {
     const fam = filas && filas[0];
     if (!fam) return res.status(404).json({ error: 'Esa familia ya no existe' });
 
-    const esAdmin = fam.role === 'admin';
+    const esDelPanel = entraAlPanel(fam);
     const conPin = await soportaPin();
 
     if (!conPin) {
@@ -101,11 +130,13 @@ module.exports = async (req, res) => {
     }
 
     if (!fam.pin_hash) {
-      // Un administrador sin PIN es exactamente el agujero que este parche viene
-      // a cerrar: no se le deja entrar hasta que alguien le configure uno.
-      if (esAdmin) {
+      // Una cuenta con acceso al panel y sin PIN es exactamente el agujero que
+      // este parche viene a cerrar: no se le deja entrar hasta que alguien le
+      // configure uno. Vale para las seis comisiones, no solo para Admin — ver
+      // `entraAlPanel`.
+      if (esDelPanel) {
         return res.status(403).json({
-          error: 'Esta cuenta de administrador no tiene PIN configurado. Por seguridad no puede entrar hasta que se le asigne uno.',
+          error: 'Esta cuenta tiene acceso al panel de la cooperativa y no tiene PIN configurado. Por seguridad no puede entrar hasta que alguien de Administración le asigne uno.',
           necesitaPin: true,
         });
       }

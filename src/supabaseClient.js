@@ -630,3 +630,114 @@ export async function getAllAdjustments() {
   if (error) { console.error('getAllAdjustments error:', error.message); return []; }
   return data || [];
 }
+
+// ─── CARGOS FIJOS DEL PERÍODO Y EXENCIONES ───────────────────────────────────
+//
+// Migración 007. Igual que con los ajustes, `null` cuando la tabla no existe:
+// quien llama tiene que poder distinguir "este período no tiene cargos" de
+// "falta ejecutar la migración", porque en el primer caso no se cobra nada y en
+// el segundo hay que seguir leyendo `periods.fixed_charge`.
+
+export async function getPeriodCharges(periodId) {
+  const { data, error } = await supabase
+    .from('period_charges')
+    .select('*')
+    .eq('period_id', periodId)
+    .order('sort', { ascending: true });
+  if (error) { console.error('getPeriodCharges error:', error.message); return null; }
+  return data || [];
+}
+
+export async function getChargeExemptions(periodId) {
+  const { data, error } = await supabase
+    .from('charge_exemptions')
+    .select('*')
+    .eq('period_id', periodId);
+  if (error) { console.error('getChargeExemptions error:', error.message); return null; }
+  return data || [];
+}
+
+export async function addPeriodCharge(charge) {
+  const { data, error } = await supabase.from('period_charges').insert([charge]).select().single();
+  if (error) {
+    console.error('addPeriodCharge error:', error.message);
+    const dup = error.code === '23505' || /duplicate key|already exists/i.test(error.message || '');
+    return { error: dup ? 'Ya existe un cargo con ese nombre en este período.' : error.message };
+  }
+  return data;
+}
+
+export async function updatePeriodCharge(id, updates) {
+  const { data, error } = await supabase.from('period_charges').update(updates).eq('id', id).select().single();
+  if (error) {
+    console.error('updatePeriodCharge error:', error.message);
+    const dup = error.code === '23505' || /duplicate key|already exists/i.test(error.message || '');
+    return { error: dup ? 'Ya existe un cargo con ese nombre en este período.' : error.message };
+  }
+  return data;
+}
+
+// Borra el cargo y, en cascada, sus exenciones (lo hace la FK de la migración).
+export async function deletePeriodCharge(id) {
+  const { error } = await supabase.from('period_charges').delete().eq('id', id);
+  if (error) { console.error('deletePeriodCharge error:', error.message); return { error: error.message }; }
+  return true;
+}
+
+export async function addChargeExemption(exemption) {
+  const { data, error } = await supabase.from('charge_exemptions').insert([exemption]).select().single();
+  if (error) {
+    console.error('addChargeExemption error:', error.message);
+    const dup = error.code === '23505' || /duplicate key|already exists/i.test(error.message || '');
+    return { error: dup ? 'Esa familia ya estaba eximida de este cargo.' : error.message };
+  }
+  return data;
+}
+
+export async function deleteChargeExemption(id) {
+  const { error } = await supabase.from('charge_exemptions').delete().eq('id', id);
+  if (error) { console.error('deleteChargeExemption error:', error.message); return { error: error.message }; }
+  return true;
+}
+
+// Copia los cargos de un período al siguiente. Se llama al crear un período,
+// porque la alternativa —tipear los mismos cuatro cargos cada mes— termina en
+// que alguien olvida uno y el cierre no cuadra.
+//
+// Las EXENCIONES no se copian. Eximir a una familia es una decisión sobre plata
+// que alguien tomó para un ciclo concreto; arrastrarla en silencio significaría
+// que una familia deja de pagar durante meses sin que nadie lo vuelva a decidir.
+export async function copyChargesToPeriod(fromPeriodId, toPeriodId) {
+  const origen = await getPeriodCharges(fromPeriodId);
+  if (origen === null) return { error: 'falta_migracion' };
+  if (!origen.length) return [];
+
+  const copias = origen.map(c => ({
+    period_id: toPeriodId,
+    name: c.name,
+    amount: c.amount,
+    note: c.note,
+    sort: c.sort,
+  }));
+  const { data, error } = await supabase.from('period_charges').insert(copias).select();
+  if (error) { console.error('copyChargesToPeriod error:', error.message); return { error: error.message }; }
+  return data || [];
+}
+
+// Deshacer un retiro marcado por error.
+//
+// No se borra el rastro de que ocurrió: `retired_at` vuelve a null porque la
+// entrega no pasó, pero el registro de quién lo deshizo va al log de actividad,
+// que es donde vive el resto de las correcciones del panel. Un retiro marcado
+// de más en la familia equivocada le cierra la ventana de ajustes a alguien que
+// todavía no recibió su caja.
+export async function unmarkRetired(orderId) {
+  const { data, error } = await supabase
+    .from('sealed_orders')
+    .update({ retired: false, retired_at: null })
+    .eq('id', orderId)
+    .select()
+    .single();
+  if (error) { console.error('unmarkRetired error:', error.message); return { error: error.message }; }
+  return data;
+}

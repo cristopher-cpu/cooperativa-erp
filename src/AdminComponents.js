@@ -1,21 +1,24 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, addBodegaAssignment, deleteBodegaAssignment, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, unmarkRetired, copyChargesToPeriod } from './supabaseClient';
 import {
   cuentaDeFamilia, ajustesPorFamilia, metricasProveedores, estadoPedidos,
-  estadoConfirmacionPorProducto, ESTADOS_CONFIRMACION,
+  estadoConfirmacionPorProducto, ESTADOS_CONFIRMACION, parseItems, clp,
+  pendientesDeConfirmacion, puedeMarcarRetiro,
 } from './calculos';
 import { PERFILES, rolesDe, esDelPanel, etiquetasDe } from './perfiles';
 import { CumplimientoProveedores } from './CumplimientoProveedores';
+import { BuscadorProducto } from './Buscador';
+import { AdminCargos, ResumenDelPeriodo } from './AdminCargos';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
-export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
+export function AdminDashboard({ families, sealed, cargos, setTab, period }) {
   const [expandedFam, setExpandedFam] = useState(null);
   // Only count orders belonging to actual familias (excludes an admin's own "Mi pedido")
   const famSealed = Object.entries(sealed).filter(([fid]) => families.some(f => f.id === fid));
   const sc = famSealed.length;
   const ret = famSealed.filter(([, o]) => o.retired).length;
-  const tot = famSealed.reduce((s, [, o]) => s + (o.total || 0) + cargo, 0);
+  const tot = famSealed.reduce((s, [fid, o]) => s + (o.total || 0) + cargos.de(fid), 0);
   const pendientes = families.filter(f => !sealed[f.id]);
 
   const getItems = (ord) => {
@@ -69,7 +72,7 @@ export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', background: ord.retired ? '#e8f5e9' : '#e3f2fd', color: ord.retired ? '#2e7d32' : '#1565c0' }}>
-                      {ord.retired ? '✓ Retirado' : '📦 Sellado'} · ${(ord.total + cargo).toLocaleString('es-CL')}
+                      {ord.retired ? '✓ Retirado' : '📦 Sellado'} · ${(ord.total + cargos.de(fid)).toLocaleString('es-CL')}
                     </span>
                     <span style={{ fontSize: '12px', color: '#888' }}>{isExpanded ? '▲' : '▼'}</span>
                   </div>
@@ -83,12 +86,12 @@ export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 2px', fontSize: '12px' }}>
-                      <span style={{ color: '#666' }}>Cargo fijo</span>
-                      <span style={{ fontWeight: 500 }}>${cargo.toLocaleString('es-CL')}</span>
+                      <span style={{ color: '#666' }}>{cargos.lista.length === 1 ? cargos.lista[0].name : 'Cargos fijos'}</span>
+                      <span style={{ fontWeight: 500 }}>${cargos.de(fid).toLocaleString('es-CL')}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0 0', fontSize: '13px' }}>
                       <span style={{ fontWeight: 700, color: '#2d5a2d' }}>Total</span>
-                      <span style={{ fontWeight: 700, color: '#2d5a2d' }}>${(ord.total + cargo).toLocaleString('es-CL')}</span>
+                      <span style={{ fontWeight: 700, color: '#2d5a2d' }}>${(ord.total + cargos.de(fid)).toLocaleString('es-CL')}</span>
                     </div>
                   </div>
                 )}
@@ -116,7 +119,7 @@ export function AdminDashboard({ families, sealed, cargo, setTab, period }) {
 
 // ─── PEDIDOS ─────────────────────────────────────────────────────────────────
 
-export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period }) {
+export function AdminPedidos({ families, sealed, cargos, onHacerPedido, period }) {
   const [expandedFam, setExpandedFam] = useState(null);
   const [srch, setSrch] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
@@ -182,7 +185,7 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
                 {o ? (
                   <>
                     <span style={{ fontSize: '11px', fontWeight: 600, padding: '4px 8px', borderRadius: '6px', background: o.retired ? '#e8f5e9' : '#e3f2fd', color: o.retired ? '#2e7d32' : '#1565c0' }}>
-                      ${(o.total + cargo).toLocaleString('es-CL')}
+                      ${(o.total + cargos.de(f.id)).toLocaleString('es-CL')}
                     </span>
                     <span style={{ fontSize: '11px', color: '#888' }}>{isExp ? '▲' : '▼'}</span>
                   </>
@@ -219,11 +222,16 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
                     </div>
                   );
                 })}
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', color: '#666', borderBottom: '1px solid #f0f7f0' }}>
-                  <span>Cargo fijo</span><span>${cargo.toLocaleString('es-CL')}</span>
-                </div>
+                {cargos.desgloseDe(f.id).map(c => (
+                  <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', color: c.exenta ? '#bbb' : '#666', borderBottom: '1px solid #f0f7f0' }}>
+                    <span style={{ textDecoration: c.exenta ? 'line-through' : 'none' }}>
+                      {c.name}{c.exenta && <span style={{ textDecoration: 'none', color: '#2e7d32', fontWeight: 600 }}> · exenta</span>}
+                    </span>
+                    <span>${Number(c.amount).toLocaleString('es-CL')}</span>
+                  </div>
+                ))}
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 4px', fontSize: '13px', fontWeight: 700, color: '#2d5a2d' }}>
-                  <span>Total</span><span>${(o.total + cargo).toLocaleString('es-CL')}</span>
+                  <span>Total</span><span>${(o.total + cargos.de(f.id)).toLocaleString('es-CL')}</span>
                 </div>
               </div>
             )}
@@ -236,60 +244,236 @@ export function AdminPedidos({ families, sealed, cargo, onHacerPedido, period })
 
 // ─── RETIROS ─────────────────────────────────────────────────────────────────
 
-export function AdminRetiros({ families, sealed, cargo, setSealed }) {
+export function AdminRetiros({ families, sealed, cargos, setSealed, period, products = [], currentAdmin }) {
   const [expandedFam, setExpandedFam] = useState(null);
+  const [ordenes, setOrdenes] = useState([]);
+  const [ajustes, setAjustes] = useState([]);
+  const [cargando, setCargando] = useState(!!period);
+  const [trabajando, setTrabajando] = useState(null);   // family_id en curso
+  const [msg, setMsg] = useState(null);
+
   const ret = Object.values(sealed).filter(o => o.retired).length;
   const sc = Object.keys(sealed).length;
 
-  const getItems = (ord) => {
-    try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
-  };
+  // Retiros necesita saber qué dijeron los proveedores. Antes no lo cargaba, y
+  // por eso se podía marcar la entrega de una familia a la que el proveedor ya
+  // le había bajado medio pedido: el descuento vivía solo en la pestaña de
+  // Faltantes, y si nadie pasaba por ahí primero, se le cobraba completo.
+  useEffect(() => {
+    if (!period) { setCargando(false); return; }
+    let cancel = false;
+    Promise.all([getPurchaseOrders(period.id), getAdjustments(period.id)]).then(([o, a]) => {
+      if (cancel) return;
+      setOrdenes(o || []);
+      setAjustes(a || []);
+      setCargando(false);
+    });
+    return () => { cancel = true; };
+  }, [period]);
+
+  const sealedList = useMemo(() => Object.values(sealed || {}), [sealed]);
+  const { porFamilia } = useMemo(
+    () => pendientesDeConfirmacion({ ordenes, sealedOrders: sealedList, period, productos: products, ajustes }),
+    [ordenes, sealedList, period, products, ajustes]
+  );
+
+  const getItems = (ord) => parseItems(ord);
 
   const markRet = async (fid, ordId) => {
-    await markRetired(ordId);
-    setSealed(p => ({ ...p, [fid]: { ...p[fid], retired: true, retired_at: new Date().toISOString() } }));
+    setTrabajando(fid); setMsg(null);
+    // `markRetired` devuelve la fila, o null si falló. Antes no se miraba el
+    // resultado: la pantalla decía "Retirado" aunque la base hubiera rechazado
+    // la escritura, y al recargar el pedido volvía a aparecer pendiente.
+    const res = await markRetired(ordId);
+    if (!res) {
+      setMsg({ tipo: 'err', texto: 'No se pudo marcar el retiro. Revisa la conexión e intenta de nuevo.' });
+      setTrabajando(null);
+      return;
+    }
+    setSealed(p => ({ ...p, [fid]: { ...p[fid], retired: true, retired_at: res.retired_at || new Date().toISOString() } }));
+    setTrabajando(null);
   };
+
+  // Deshacer. Un retiro marcado por error no es cosmético: le cierra a la
+  // familia la ventana para reclamar faltantes (`ventanaAjustes` la abre con el
+  // retiro) y da por entregada una caja que sigue en la bodega.
+  const desmarcar = async (fam, ord) => {
+    if (!window.confirm(
+      '¿Deshacer el retiro de ' + fam.name + '?\n\n' +
+      'El pedido vuelve a quedar pendiente de entrega. Queda registrado en Actividad ' +
+      'quién lo deshizo, porque cambia lo que la cooperativa da por entregado.'
+    )) return;
+
+    setTrabajando(fam.id); setMsg(null);
+    const res = await unmarkRetired(ord.id);
+    if (!res || res.error) {
+      setMsg({ tipo: 'err', texto: (res && res.error) || 'No se pudo deshacer el retiro. Revisa la conexión e intenta de nuevo.' });
+      setTrabajando(null);
+      return;
+    }
+    setSealed(p => ({ ...p, [fam.id]: { ...p[fam.id], retired: false, retired_at: null } }));
+    if (currentAdmin) {
+      addAdminLog({
+        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.name,
+        action: 'retiro_deshecho',
+        details: fam.name + ': se deshizo el retiro (volvió a pendiente de entrega)',
+      });
+    }
+    setMsg({ tipo: 'ok', texto: 'El retiro de ' + fam.name + ' volvió a pendiente.' });
+    setTrabajando(null);
+  };
+
+  // Aplicar desde la propia fila los faltantes que el proveedor ya avisó. Es el
+  // paso que faltaba: sin esto, bloquear el retiro sería un callejón sin salida
+  // y la comisión tendría que cambiar de pestaña con la familia en la puerta.
+  const aplicarFaltantes = async (fam) => {
+    const pend = (porFamilia.get(fam.id) || {}).noTrae || [];
+    if (!pend.length) return;
+    setTrabajando(fam.id); setMsg(null);
+    const res = await addAdjustmentsBulk(pend);
+    if (res && res.error) { setMsg({ tipo: 'err', texto: res.error }); setTrabajando(null); return; }
+    const frescos = await getAdjustments(period.id);
+    setAjustes(frescos || []);
+    setMsg({
+      tipo: 'ok',
+      texto: 'Se descontaron ' + pend.length + ' producto' + (pend.length === 1 ? '' : 's') +
+        ' del pedido de ' + fam.name + '. Ya puedes marcar el retiro.',
+    });
+    setTrabajando(null);
+  };
+
+  if (cargando) return <p style={{ color: '#888', fontSize: '13px' }}>Cargando retiros...</p>;
+
+  // Cuántas familias no se pueden entregar todavía. Va arriba porque es la
+  // pregunta que la comisión se hace antes de abrir la bodega, no una por una.
+  const bloqueadas = families.filter(f => sealed[f.id] && !sealed[f.id].retired &&
+    puedeMarcarRetiro(porFamilia.get(f.id)).puede === false).length;
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '1.5rem' }}>
-        {[{ l: 'Retirados', v: ret, c: '#2e7d32', bg: '#e8f5e9' }, { l: 'Pendientes', v: sc - ret, c: '#e65100', bg: '#fff3e0' }, { l: 'Sin sellar', v: families.length - sc, c: '#888', bg: '#f5f5f5' }].map(m => (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '1.5rem' }}>
+        {[
+          { l: 'Retirados', v: ret, c: '#2e7d32', bg: '#e8f5e9' },
+          { l: 'Pendientes', v: sc - ret, c: '#e65100', bg: '#fff3e0' },
+          { l: 'Con descuentos sin aplicar', v: bloqueadas, c: bloqueadas ? '#c62828' : '#888', bg: bloqueadas ? '#ffebee' : '#f5f5f5' },
+          { l: 'Sin sellar', v: families.length - sc, c: '#888', bg: '#f5f5f5' },
+        ].map(m => (
           <div key={m.l} style={{ padding: '0.9rem', background: m.bg, borderRadius: '8px', textAlign: 'center' }}>
-            <p style={{ fontSize: '10px', color: m.c, margin: 0, fontWeight: 600 }}>{m.l}</p>
+            <p style={{ fontSize: '10px', color: m.c, margin: 0, fontWeight: 600, lineHeight: 1.3 }}>{m.l}</p>
             <p style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0 0', color: m.c }}>{m.v}</p>
           </div>
         ))}
       </div>
+
+      {msg && (
+        <div style={{ background: msg.tipo === 'ok' ? '#e8f5e9' : '#ffebee', border: `1px solid ${msg.tipo === 'ok' ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem', display: 'flex', gap: '9px', alignItems: 'flex-start' }}>
+          <span>{msg.tipo === 'ok' ? '✓' : '⚠'}</span>
+          <p style={{ fontSize: '13px', color: msg.tipo === 'ok' ? '#2e7d32' : '#c62828', margin: 0, fontWeight: 500, lineHeight: 1.5 }}>{msg.texto}</p>
+          <button onClick={() => setMsg(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#999' }}>✕</button>
+        </div>
+      )}
+
+      {bloqueadas > 0 && (
+        <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '12px', color: '#e65100', margin: 0, lineHeight: 1.6 }}>
+            <strong>{bloqueadas} familia{bloqueadas === 1 ? '' : 's'}</strong> no se puede{bloqueadas === 1 ? '' : 'n'} marcar como retirada{bloqueadas === 1 ? '' : 's'} todavía:
+            el proveedor avisó que no trae productos de su pedido y el descuento no se aplicó.
+            Si marcas el retiro antes, se le cobra algo que nunca llegó. Cada fila tiene el botón para descontarlo.
+          </p>
+        </div>
+      )}
 
       {families.map(f => {
         const o = sealed[f.id];
         if (!o) return null;
         const isExp = expandedFam === f.id;
         const items = getItems(o);
+        const pend = porFamilia.get(f.id) || { noTrae: [], parcial: [] };
+        const permiso = puedeMarcarRetiro(pend);
+        const cargoFam = cargos.de(f.id);
+        const exentaDe = cargos.exencionesDe(f.id);
+        const ocupada = trabajando === f.id;
+
+        const borde = o.retired ? '#c8e6c9' : !permiso.puede ? '#ffab91' : permiso.advertencia ? '#ffe082' : '#dde8dd';
+
         return (
-          <div key={f.id} style={{ background: 'white', border: `1px solid ${o.retired ? '#c8e6c9' : '#dde8dd'}`, borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
+          <div key={f.id} style={{ background: 'white', border: `1px solid ${borde}`, borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
             <div onClick={() => setExpandedFam(isExp ? null : f.id)}
-              style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: o.retired ? '#4CAF50' : '#ff9800', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700 }}>{f.initials}</div>
-                <div>
+              style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: o.retired ? '#4CAF50' : !permiso.puede ? '#e64a19' : '#ff9800', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
+                <div style={{ minWidth: 0 }}>
                   <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
                   <p style={{ fontSize: '11px', color: '#888', margin: '2px 0 0' }}>
-                    {o.retired ? `Retirado ${new Date(o.retired_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : `Total: $${(o.total + cargo).toLocaleString('es-CL')}`}
+                    {o.retired
+                      ? `Retirado ${new Date(o.retired_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                      : `Total: $${(o.total + cargoFam).toLocaleString('es-CL')}`}
                   </p>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {!o.retired && (
-                  <button onClick={e => { e.stopPropagation(); markRet(f.id, o.id); }}
-                    style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 600 }}>
-                    ✓ Marcar retirado
-                  </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                {!o.retired && !permiso.puede && (
+                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: '#ffebee', color: '#c62828' }}>
+                    📭 {permiso.noTrae.length} sin descontar
+                  </span>
                 )}
-                {o.retired && <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', background: '#e8f5e9', color: '#2e7d32' }}>✓ Retirado</span>}
+                {!o.retired && permiso.puede && permiso.advertencia && (
+                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: '#fff3e0', color: '#e65100' }}>
+                    ⚖ {permiso.parcial.length} parcial{permiso.parcial.length === 1 ? '' : 'es'}
+                  </span>
+                )}
+                {!o.retired && (
+                  permiso.puede
+                    ? <button onClick={e => { e.stopPropagation(); markRet(f.id, o.id); }} disabled={ocupada}
+                        style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: ocupada ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 600 }}>
+                        {ocupada ? '...' : '✓ Marcar retirado'}
+                      </button>
+                    : <button onClick={e => { e.stopPropagation(); aplicarFaltantes(f); }} disabled={ocupada}
+                        title={permiso.texto}
+                        style={{ padding: '5px 12px', background: '#e65100', color: 'white', border: 'none', borderRadius: '6px', cursor: ocupada ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 700 }}>
+                        {ocupada ? 'Aplicando...' : '📭 Descontar y habilitar'}
+                      </button>
+                )}
+                {o.retired && (
+                  <>
+                    <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', background: '#e8f5e9', color: '#2e7d32' }}>✓ Retirado</span>
+                    <button onClick={e => { e.stopPropagation(); desmarcar(f, o); }} disabled={ocupada}
+                      title="Se marcó por error: devolver a pendiente de entrega"
+                      style={{ padding: '4px 9px', background: 'white', color: '#666', border: '1px solid #dde8dd', borderRadius: '6px', cursor: ocupada ? 'wait' : 'pointer', fontSize: '10px', fontWeight: 600 }}>
+                      {ocupada ? '...' : '↩ Deshacer'}
+                    </button>
+                  </>
+                )}
                 <span style={{ fontSize: '11px', color: '#888' }}>{isExp ? '▲' : '▼'}</span>
               </div>
             </div>
+
+            {/* Lo que el proveedor avisó, a la vista sin tener que expandir: es
+                la razón por la que el botón de retiro no está disponible. */}
+            {!o.retired && !permiso.puede && (
+              <div style={{ borderTop: '1px solid #ffe0d6', background: '#fff5f2', padding: '9px 1rem' }}>
+                <p style={{ fontSize: '11px', color: '#c62828', margin: '0 0 5px', fontWeight: 600 }}>{permiso.texto}</p>
+                {permiso.noTrae.map((p, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#666', padding: '2px 0' }}>
+                    <span>{p.product_name} <span style={{ color: '#aaa' }}>×{p.qty}</span></span>
+                    <span style={{ fontWeight: 600, color: '#c62828' }}>− ${Math.abs(p.amount).toLocaleString('es-CL')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!o.retired && permiso.puede && permiso.advertencia && (
+              <div style={{ borderTop: '1px solid #ffe082', background: '#fffdf5', padding: '9px 1rem' }}>
+                <p style={{ fontSize: '11px', color: '#e65100', margin: '0 0 5px', fontWeight: 600 }}>{permiso.texto}</p>
+                {permiso.parcial.map((p, i) => (
+                  <div key={i} style={{ fontSize: '11px', color: '#666', padding: '2px 0' }}>
+                    {p.product_name} — pidió {p.suQty}; del total de {p.pedido} llegan {p.llegan}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {isExp && (
               <div style={{ borderTop: '1px solid #f0f7f0', padding: '0.75rem 1rem', background: '#fafffe' }}>
@@ -299,11 +483,24 @@ export function AdminRetiros({ families, sealed, cargo, setSealed }) {
                     <span style={{ color: '#555' }}>{i.u} × {i.qty} = <strong>${(i.p * i.qty).toLocaleString('es-CL')}</strong></span>
                   </div>
                 ))}
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 4px', fontSize: '12px', color: '#666', borderBottom: '1px solid #f0f7f0' }}>
-                  <span>Cargo fijo</span><span>${cargo.toLocaleString('es-CL')}</span>
-                </div>
+
+                {/* Los cargos, uno por uno. Un total de $5.500 sin desglose es
+                    la pregunta que la comisión recibe en la puerta. */}
+                {cargos.lista.map(c => {
+                  const ex = exentaDe.find(x => x.id === c.id);
+                  return (
+                    <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f0f7f0', fontSize: '12px', color: ex ? '#aaa' : '#666' }}>
+                      <span style={{ textDecoration: ex ? 'line-through' : 'none' }}>
+                        {c.name}
+                        {ex && <span style={{ textDecoration: 'none', color: '#2e7d32', fontWeight: 600 }}> · exenta</span>}
+                      </span>
+                      <span>${Number(c.amount).toLocaleString('es-CL')}</span>
+                    </div>
+                  );
+                })}
+
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 4px', fontSize: '13px', fontWeight: 700, color: '#2d5a2d' }}>
-                  <span>Total</span><span>${(o.total + cargo).toLocaleString('es-CL')}</span>
+                  <span>Total</span><span>${(o.total + cargoFam).toLocaleString('es-CL')}</span>
                 </div>
               </div>
             )}
@@ -314,23 +511,25 @@ export function AdminRetiros({ families, sealed, cargo, setSealed }) {
   );
 }
 
+
 // ─── FLUJO DE CAJA ────────────────────────────────────────────────────────────
 
-export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies }) {
+export function AdminFlujoCaja({ period, cargos, recargarCargos, families, setFamilies, sealed = {}, currentAdmin, puedeEximir = true }) {
   const [entries, setEntries] = useState([]);
+  const [ajustes, setAjustes] = useState([]);
   const [loading, setLoading] = useState(!!period);
   const [showForm, setShowForm] = useState(false);
   const emptyForm = { type: 'ingreso', description: '', amount: '', date: new Date().toISOString().split('T')[0], family_id: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [editCargo, setEditCargo] = useState(false);
-  const [cargoVal, setCargoVal] = useState(cargo.toString());
-  const [savingCargo, setSavingCargo] = useState(false);
   const [err, setErr] = useState('');
   const [cashFlowError, setCashFlowError] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
-  const fams = (families || []).filter(f => f.role === 'familia');
+  // Por perfiles, no por `role`: una socia con Balance Contable o Retiro tiene
+  // `role === 'familia'` pero también pide, y dejarla fuera de esta lista era
+  // impedir registrarle un pago. Mismo patrón que el resto del panel.
+  const fams = (families || []).filter(f => rolesDe(f).includes('familia'));
 
   useEffect(() => {
     if (!period) return;
@@ -345,6 +544,9 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
       setCashFlowError(true);
       setLoading(false);
     });
+    // Los ajustes cambian cuánto debería recaudar el período: sin ellos el
+    // resumen mostraría el monto de antes de los descuentos.
+    getAdjustments(period.id).then(a => setAjustes(a || []));
   }, [period]);
 
   const ingresos = entries.filter(e => e.type === 'ingreso').reduce((s, e) => s + (e.amount || 0), 0);
@@ -414,15 +616,6 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
     setEntries(p => p.filter(e => e.id !== id));
   };
 
-  const saveCargo = async () => {
-    setSavingCargo(true);
-    const val = parseInt(cargoVal) || 0;
-    await updatePeriod(period.id, { fixed_charge: val });
-    setPeriod(p => ({ ...p, fixed_charge: val }));
-    setEditCargo(false);
-    setSavingCargo(false);
-  };
-
   if (!period) return (
     <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1.25rem' }}>
       <p style={{ fontSize: '13px', color: '#e65100', margin: 0 }}>No hay período activo. Crea uno desde la pestaña <strong>Período</strong> para registrar flujo de caja.</p>
@@ -431,33 +624,16 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
 
   return (
     <div>
-      {/* Cargo fijo */}
-      <div style={{ background: 'white', borderRadius: '10px', border: '1px solid #dde8dd', padding: '1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <p style={{ fontSize: '11px', color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>Cargo fijo por familia</p>
-            {!editCargo && <p style={{ fontSize: '22px', fontWeight: 700, margin: '4px 0 0', color: '#1565c0' }}>${cargo.toLocaleString('es-CL')}</p>}
-          </div>
-          {!editCargo
-            ? <button onClick={() => { setEditCargo(true); setCargoVal(cargo.toString()); }}
-                style={{ padding: '6px 14px', background: '#e3f2fd', color: '#1565c0', border: '1px solid #90caf9', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>Cambiar</button>
-            : (
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px', color: '#555' }}>$</span>
-                <input type="number" value={cargoVal} onChange={e => setCargoVal(e.target.value)}
-                  style={{ width: '110px', padding: '6px 8px', border: '1px solid #4CAF50', borderRadius: '6px', fontSize: '14px', fontWeight: 700, textAlign: 'right' }} />
-                <button onClick={saveCargo} disabled={savingCargo}
-                  style={{ padding: '6px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>{savingCargo ? '...' : '✓ Guardar'}</button>
-                <button onClick={() => setEditCargo(false)}
-                  style={{ padding: '6px 10px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>✕</button>
-              </div>
-            )
-          }
-        </div>
-        <p style={{ fontSize: '11px', color: '#aaa', margin: '8px 0 0' }}>Este cargo se aplica a todas las familias en el período {period?.label}</p>
-      </div>
+      {/* Lo que el período implica según los pedidos, contra lo que se registró.
+          Antes esta pestaña solo mostraba lo tipeado a mano: se marcaba un retiro
+          con cargos incluidos y el flujo seguía en cero. */}
+      <ResumenDelPeriodo period={period} families={families} sealed={sealed}
+        ajustes={ajustes} cargos={cargos} entries={entries} sinCashFlow={cashFlowError} />
 
-      {/* Mensaje de éxito */}
+      <AdminCargos period={period} cargos={cargos} recargar={recargarCargos}
+        families={families} currentAdmin={currentAdmin} puedeEximir={puedeEximir} />
+
+
       {successMsg && (
         <div style={{ background: '#e8f5e9', border: '1px solid #81c784', borderRadius: '8px', padding: '10px 14px', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>✓</span>
@@ -613,7 +789,7 @@ export function AdminFlujoCaja({ period, setPeriod, cargo, families, setFamilies
       {cashFlowError && (
         <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '8px', padding: '1rem' }}>
           <p style={{ fontSize: '13px', color: '#e65100', fontWeight: 600, margin: 0 }}>⚠ Tabla cash_flow no disponible aún</p>
-          <p style={{ fontSize: '12px', color: '#666', margin: '6px 0 0' }}>Pendiente de creación en Supabase. El cargo fijo puede configurarse desde aquí igualmente.</p>
+          <p style={{ fontSize: '12px', color: '#666', margin: '6px 0 0' }}>Pendiente de creación en Supabase. Los cargos fijos y el resumen del período funcionan igual; lo que no se puede es registrar pagos y gastos a mano.</p>
         </div>
       )}
     </div>
@@ -720,6 +896,21 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
     }
     if (rol === 'admin' && quitando && currentAdmin && currentAdmin.id === f.id) {
       if (!window.confirm('Te estás quitando Administración a ti mismo.\n\nPerderás el acceso al panel al cerrar sesión. ¿Continuar?')) return;
+    }
+
+    // Una cuenta con acceso al panel y sin PIN no puede entrar: /api/login la
+    // rechaza, y con razón — vería saldos y flujo de caja de toda la cooperativa
+    // sin credencial. Hay que decirlo ANTES, o se le quita el acceso a alguien
+    // creyendo que se le está dando.
+    const teniaPanel = actuales.some(r => r !== 'familia' && PERFILES[r]);
+    const tendraPanel = nuevos.some(r => r !== 'familia' && PERFILES[r]);
+    if (!quitando && tendraPanel && !teniaPanel && !f.pin_set_at) {
+      if (!window.confirm(
+        f.name + ' no tiene PIN configurado.\n\n' +
+        'Al darle un perfil del panel, no podrá entrar hasta que le asignes uno ' +
+        '(botón 🔒 en su misma fila): una cuenta que ve saldos y flujo de caja de ' +
+        'toda la cooperativa no puede entrar sin credencial.\n\n¿Asignar el perfil igual?'
+      )) return;
     }
 
     setRoleSavingId(f.id);
@@ -1140,7 +1331,7 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
 
 // ─── PERÍODO ──────────────────────────────────────────────────────────────────
 
-export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, currentAdmin }) {
+export function AdminPeriodo({ period, setPeriod, families, sealed, cargos, recargarCargos, currentAdmin }) {
   const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '', date_confirm_until: period?.date_confirm_until || '', date_adjust_until: period?.date_adjust_until || '' });
   const [loading, setLoading] = useState(false);
   const [dateErr, setDateErr] = useState('');
@@ -1213,18 +1404,30 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
               if (!createLabel.trim()) { setCreateMsg('Ingresa un nombre para el período'); return; }
               setCreating(true);
               setCreateMsg('');
+              // `getPastPeriods` los devuelve ordenados por fecha de cierre, así
+              // que el primero es el último que se cerró: de ahí salen los cargos
+              // del nuevo. El 4.000 que estaba escrito a mano acá era el cargo de
+              // un período concreto, no una constante de la cooperativa.
+              const anterior = pastPeriods[0] || null;
               const newPeriod = {
                 id: Date.now().toString(),
                 label: createLabel.trim(),
                 month: createMonth.trim() || createLabel.trim(),
                 active: true,
-                fixed_charge: 4000,
+                fixed_charge: anterior ? (anterior.fixed_charge || 0) : 0,
                 date_from: null,
                 date_to: null,
                 date_delivery: null
               };
               const result = await createPeriod(newPeriod);
               if (result && result.id) {
+                if (anterior) {
+                  const copia = await copyChargesToPeriod(anterior.id, result.id);
+                  if (copia && copia.error && copia.error !== 'falta_migracion') {
+                    setCreateMsg('El período se creó, pero los cargos fijos no se copiaron desde ' + anterior.label + '. Revísalos en Flujo de Caja.');
+                  }
+                }
+                if (recargarCargos) await recargarCargos();
                 setPeriod(result);
                 logAction('period_created', `Período creado: ${createLabel.trim()}`);
               } else {
@@ -1302,20 +1505,36 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
     if (!newLabel.trim()) { setCloseMsg('Ingresa un nombre para el nuevo período'); return; }
     setClosing(true);
 
-    const totalValue = Object.values(sealed).reduce((s, o) => s + o.total + cargo, 0);
+    const totalValue = Object.values(sealed).reduce((s, o) => s + o.total + cargos.de(o.family_id), 0);
     const summary = {
       period_label: period.label,
       families_count: na.length,
       sealed_count: sc,
       total_value: totalValue,
-      cargo,
+      cargo: cargos.total,
+      // Los cargos del período quedan escritos en el resumen del cierre. El
+      // período conserva sus propias filas en period_charges, pero el resumen es
+      // lo que alguien abre en un año para entender qué se cobró y por qué, y no
+      // debería tener que cruzar dos tablas para saberlo.
+      cargos: cargos.lista.map(c => ({ name: c.name, amount: c.amount })),
+      exenciones: cargos.exenciones.map(e => {
+        const c = cargos.lista.find(x => x.id === e.charge_id);
+        const fam = families.find(f => f.id === e.family_id);
+        return {
+          familia: (fam && fam.name) || e.family_id,
+          cargo: (c && c.name) || e.charge_id,
+          monto: (c && c.amount) || 0,
+          motivo: e.reason,
+          concedida_por: e.granted_by_name || null,
+        };
+      }),
       families: na.map(f => {
         const ord = sealed[f.id];
         return {
           name: f.name,
           balance_before: f.balance || 0,
           had_order: !!ord,
-          order_total: ord ? ord.total + cargo : 0
+          order_total: ord ? ord.total + cargos.de(f.id) : 0
         };
       })
     };
@@ -1332,7 +1551,10 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
       if (!ord) continue;
       if (ord.charged_at) continue; // ya cobrado en un intento anterior
 
-      const cuenta = cuentaDeFamilia({ ord, ajustes: porFam.get(f.id) || [], cargo, saldo: f.balance || 0 });
+      // `cargos.de(f.id)`, no el total: si esta familia está eximida de un cargo,
+      // cobrárselo al cerrar anularía la exención justo en el momento en que
+      // importa. Es el único lugar donde el cargo se convierte en plata.
+      const cuenta = cuentaDeFamilia({ ord, ajustes: porFam.get(f.id) || [], cargo: cargos.de(f.id), saldo: f.balance || 0 });
       const nuevoSaldo = (f.balance || 0) - cuenta.cargoAlCerrar;
 
       const res = await updateFamilyBalance(f.id, nuevoSaldo);
@@ -1351,7 +1573,11 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
       label: newLabel.trim(),
       month: newMonth.trim() || newLabel.trim(),
       active: true,
-      fixed_charge: cargo,
+      // Se copia el total como respaldo. Las filas de period_charges son la
+      // fuente de verdad y el trigger de la migración 007 recalcula esta columna
+      // en cuanto se insertan; ponerla acá evita que el período nuevo aparezca
+      // con cargo cero durante el segundo que tarda la copia.
+      fixed_charge: cargos.total,
       date_from: null,
       date_to: null,
       date_delivery: null
@@ -1359,6 +1585,15 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargo, curre
 
     const result = await closePeriod(period.id, newPeriod, summary);
     if (result && result.id) {
+      // Los cargos se arrastran al período nuevo: tipear los mismos cuatro
+      // cargos cada mes termina en que alguien olvida uno y el cierre no cuadra.
+      // Las exenciones NO se copian a propósito — eximir a una familia es una
+      // decisión sobre plata que corresponde tomar de nuevo cada ciclo.
+      const copia = await copyChargesToPeriod(period.id, result.id);
+      if (copia && copia.error && copia.error !== 'falta_migracion') {
+        setCloseMsg('El período se cerró, pero los cargos fijos no se copiaron al nuevo. Revísalos en Flujo de Caja antes de cobrar.');
+      }
+      if (recargarCargos) await recargarCargos();
       logAction('period_closed', `Período cerrado: ${period.label} → Nuevo: ${newLabel.trim()} (${sc} pedidos, total $${totalValue.toLocaleString('es-CL')})`);
       setPeriod(result);
       setShowClose(false);
@@ -1724,7 +1959,7 @@ export function AdminLogs() {
 // ─── ANALÍTICA ────────────────────────────────────────────────────────────────
 
 const MONTHS_ES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-const clp = n => '$' + Math.round(n || 0).toLocaleString('es-CL');
+// `clp` se importa de calculos.js: estaba duplicado acá con el mismo cuerpo.
 
 function parseOrderItems(ord) {
   try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
@@ -2284,8 +2519,6 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState('');
-  const [productSearch, setProductSearch] = useState('');
-  const [showProductDrop, setShowProductDrop] = useState(false);
   const [assigningItem, setAssigningItem] = useState(null);
   const [assignForm, setAssignForm] = useState({ family_id: '', quantity: '' });
   const [assignSaving, setAssignSaving] = useState(false);
@@ -2321,7 +2554,7 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
       period_id: period.id,
     };
     const result = await addBodegaItem(item);
-    if (result) { setItems(p => [...p, result]); setForm(emptyForm); setShowForm(false); setFormErr(''); setProductSearch(''); setShowProductDrop(false); }
+    if (result) { setItems(p => [...p, result]); setForm(emptyForm); setShowForm(false); setFormErr(''); }
     else { setFormErr('Error al guardar'); }
     setSaving(false);
   };
@@ -2417,42 +2650,15 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
             <div style={{ gridColumn: 'span 2', position: 'relative' }}>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Producto del maestro *</label>
-              {form.product_id ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <div style={{ flex: 1, padding: '7px 10px', border: '1px solid #4CAF50', borderRadius: '6px', background: '#f0f7f0', fontSize: '13px', color: '#2d5a2d', fontWeight: 500 }}>
-                    ✓ {form.product_name} — {form.unit}
-                  </div>
-                  <button type="button" onClick={() => setForm(prev => ({ ...prev, product_id: '', product_name: '', provider: '', unit: '', price: '' }))}
-                    style={{ padding: '6px 10px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', color: '#666', whiteSpace: 'nowrap' }}>
-                    Cambiar
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <input type="text" placeholder="Buscar producto del maestro..." value={productSearch}
-                    onChange={e => { setProductSearch(e.target.value); setShowProductDrop(true); }}
-                    onFocus={() => setShowProductDrop(true)}
-                    onBlur={() => setTimeout(() => setShowProductDrop(false), 150)}
-                    style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
-                  {showProductDrop && (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.10)', zIndex: 100, maxHeight: '200px', overflowY: 'auto' }}>
-                      {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).map(p => (
-                        <div key={p.id} onMouseDown={() => {
-                          setForm(prev => ({ ...prev, product_id: p.id, product_name: p.name, provider: p.provider || '', unit: p.unit, price: p.price.toString() }));
-                          setProductSearch(''); setShowProductDrop(false);
-                        }}
-                        style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontWeight: 500 }}>{p.name}</span>
-                          <span style={{ color: '#888', fontSize: '11px' }}>{p.unit} · ${p.price.toLocaleString('es-CL')}</span>
-                        </div>
-                      ))}
-                      {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
-                        <div style={{ padding: '10px', textAlign: 'center', color: '#aaa', fontSize: '12px' }}>Sin resultados</div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
+              <BuscadorProducto
+                productos={products}
+                value={form.product_id}
+                onChange={p => setForm(prev => p
+                  ? { ...prev, product_id: p.id, product_name: p.name, provider: p.provider || '', unit: p.unit, price: p.price.toString() }
+                  : { ...prev, product_id: '', product_name: '', provider: '', unit: '', price: '' })}
+                placeholder="Escribe para buscar un producto del maestro..."
+                vacio="No hay productos cargados en el maestro"
+              />
               {form.product_id && (
                 <p style={{ fontSize: '11px', color: '#888', margin: '4px 0 0' }}>
                   {form.provider && `${form.provider} · `}Precio del maestro: ${parseInt(form.price || 0).toLocaleString('es-CL')} /{form.unit}
@@ -2487,7 +2693,7 @@ export function AdminBodega({ period, families, setFamilies, products = [] }) {
               style={{ flex: 1, padding: '8px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>
               {saving ? 'Guardando...' : '+ Agregar a bodega'}
             </button>
-            <button onClick={() => { setShowForm(false); setFormErr(''); setProductSearch(''); setShowProductDrop(false); }}
+            <button onClick={() => { setShowForm(false); setFormErr(''); }}
               style={{ padding: '8px 14px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>Cancelar</button>
           </div>
         </div>

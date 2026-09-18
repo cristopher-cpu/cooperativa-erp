@@ -1,7 +1,7 @@
 # Fase 2 — Estado, decisiones y pendientes
 
 Cooperativa de Consumo Responsable **Quilpueblo**.
-Última actualización: 12 de septiembre de 2026 (QA y revisión de seguridad).
+Última actualización: 18 de septiembre de 2026 (etapa 4c: retiros, perfiles en el login, cargos múltiples).
 
 ---
 
@@ -207,6 +207,113 @@ que la afectan).
 Migración: `006_cierre_pedidos_y_confirmacion_asistida.sql`.
 Todo degrada si no se corrió: los pedidos se cierran solos por fecha y las
 confirmaciones se guardan sin firma.
+
+### Etapa 4c — Lo que salió de probar el flujo con cargos reales ✅ (18-sep-2026)
+
+Seis hallazgos de una sesión de prueba. Tres eran bugs, tres eran funcionalidad
+que faltaba.
+
+**1. Se podía marcar un retiro con descuentos del proveedor sin aplicar.**
+El proveedor ya había avisado que no traía un producto y Retiros dejaba marcar
+la entrega igual: el descuento vivía solo en la pestaña Faltantes y Extras, y si
+nadie pasaba por ahí primero se le cobraba a la familia algo que nunca llegó.
+
+`pendientesDeConfirmacion()` y `puedeMarcarRetiro()` pasaron a `calculos.js`
+—antes el cálculo estaba dentro del componente de Faltantes y la otra pantalla no
+podía verlo— y Retiros ahora bloquea el botón, muestra qué falta descontar y
+ofrece descontarlo desde la misma fila.
+
+Se bloquea **solo** el caso inequívoco (*"no lo trae"*: nadie lo recibe, un clic
+lo resuelve). Una entrega **parcial** advierte pero no bloquea: repartir quién se
+queda sin su parte es una decisión de la cooperativa, y esa conversación no puede
+ocurrir con la fila de familias esperando en la puerta.
+
+**2. Un retiro marcado por error no se podía deshacer.** No es cosmético: el
+retiro le abre a la familia la ventana para reclamar faltantes
+(`ventanaAjustes`), así que marcarlo en la familia equivocada le da por entregada
+una caja que sigue en bodega. `unmarkRetired()` con confirmación, y queda escrito
+en Actividad quién lo deshizo.
+
+**3. Asignar un perfil no llegaba al usuario.** El panel escribía `roles` en la
+base correctamente; el problema estaba en `api/login.js`: `familiaPublica()` no
+devolvía `roles`, y como se entra con lo que responde el servidor y no con la
+fila que el navegador ya tenía, `rolesDe()` caía al respaldo de `role` —que solo
+distingue `admin` de `familia` y no sabe nada de las otras cuatro comisiones—.
+Una familia marcada como Retiro o Balance Contable entraba a la vista de familia.
+
+De paso apareció un agujero: la exigencia de PIN se medía con
+`role === 'admin'`, y una socia con Balance Contable tiene `role === 'familia'`.
+Podía ver saldos y flujo de caja de toda la cooperativa **sin credencial**. Ahora
+se mide por lo que la cuenta puede VER (`entraAlPanel`), no por la etiqueta que
+le quedó de cuando los roles eran uno solo.
+
+Consecuencia operativa: **asignar un perfil del panel a una familia sin PIN la
+deja fuera hasta que se le configure uno.** El panel avisa antes de asignarlo.
+
+**4. Buscador de productos con coincidencias de texto.** Elegir entre 82
+productos en un `<select>` obliga a recorrer la lista entera, y el maestro va a
+crecer. `src/Buscador.js` busca sin acentos y por palabras en cualquier orden
+("integral arroz" encuentra "Arroz integral"), resalta la coincidencia, y se
+maneja con flechas y Enter.
+
+El patrón ya existía **dos veces** copiado (proveedor en Productos, producto en
+Bodega) con diferencias entre las copias. Está una sola vez y se usa en los tres
+lugares. Para un faltante muestra *cuánto pidió esta familia* en vez del precio:
+es el techo de lo que se le puede marcar.
+
+**5. El flujo de caja no mostraba lo que el período implica.** Solo listaba los
+movimientos que alguien tipeó a mano: se marcaba un retiro con cargos incluidos y
+el flujo seguía en cero.
+
+`ResumenDelPeriodo` muestra **separadas** dos cifras que no hay que mezclar: lo
+que el período debería recaudar según los pedidos, y lo que está registrado como
+ingreso. La diferencia es lo que queda por cobrar. Juntarlas en un número sería
+exactamente lo que impide cuadrar contra los comprobantes de transferencia.
+
+No inventa movimientos ni crea columnas: todo se deriva de tablas que ya existen.
+Cada fila dice de dónde sale, porque una cifra sin procedencia no se puede
+defender en una asamblea. El saldo anterior va aparte a propósito: baja lo que
+hay que cobrar este mes, pero no es plata que entró este mes.
+
+**6. Cargos fijos múltiples, con exenciones por familia.**
+
+El cargo era un número: $4.000 igual para todas, sin nombre. Ahora son varios con
+nombre propio y motivo, y una familia puede estar eximida de alguno.
+
+Eximir es mover plata de la cooperativa, así que **el motivo es obligatorio** y
+queda firmado con quién lo concedió — el mismo criterio que la migración 004 fijó
+para los ajustes. Solo Administración y Balance Contable pueden conceder o quitar
+exenciones; los demás perfiles las ven.
+
+Decisión de diseño: **los cargos son por período**, no una lista permanente. Un
+período cerrado tiene que seguir diciendo lo que decía; si fueran globales con un
+monto vigente, subir la cuota en noviembre reescribiría lo que se cobró en
+septiembre y el cierre de septiembre dejaría de cuadrar con sus comprobantes.
+Misma lógica que `sealed_orders.items`. El costo es tipearlos cada mes, y se paga
+copiándolos del período anterior al crear uno nuevo. **Las exenciones no se
+copian**: arrastrarlas en silencio significaría que una familia deja de pagar
+durante meses sin que nadie lo vuelva a decidir.
+
+Consecuencia en el código: `cargo` (escalar, que viajaba a veinte lugares) pasó a
+ser el objeto `cargos`, con `de(familyId)` y `desgloseDe(familyId)`. Pasar el
+número obligaría a cada pantalla a decidir por su cuenta si aplicar una exención,
+y dos pantallas mostrarían cuentas distintas de la misma familia.
+
+`periods.fixed_charge` **no se elimina**: un trigger lo mantiene sincronizado con
+la suma de los cargos, igual que `families.role` quedó sincronizado con `roles` en
+la 005. Si el trigger y las filas se descalzan, el panel lo dice en voz alta en
+vez de cobrar cero en silencio.
+
+Migración: `007_cargos_multiples_y_exenciones.sql`. Si no se ejecuta, se sigue
+cobrando el cargo único que ya estaba y el panel explica qué falta.
+
+**Pendiente que esto dejó a la vista:** `ResumenDelPeriodo` cuenta a las familias
+administradoras (usa `rolesDe(f).includes('familia')`, que es lo correcto: también
+piden), pero el bucle de cobro de `handleClosePeriod` sigue usando
+`f.role === 'familia'` y las omite. Antes la discrepancia estaba escondida; ahora
+se ve como una diferencia entre lo que debería recaudar y lo que se cobra. Es la
+deuda técnica de §8 y **sigue pendiendo de una decisión de la cooperativa**,
+porque arreglarla cambia a quién se le cobra plata.
 
 ### Etapa 5 — Reportes Excel
 

@@ -4,15 +4,16 @@ import {
   getPurchaseOrders,
 } from './supabaseClient';
 import {
-  TIPOS, clp, parseItems, montoAjuste, cuentaDeFamilia, ajustesPorFamilia, derivarDeConfirmacion,
+  TIPOS, clp, parseItems, montoAjuste, cuentaDeFamilia, ajustesPorFamilia, pendientesDeConfirmacion,
 } from './calculos';
+import { BuscadorProducto } from './Buscador';
 
 // ─── FALTANTES Y EXTRAS ──────────────────────────────────────────────────────
 // Lo que el proveedor no trae y lo que la familia se lleva de más. Es la pieza
 // que conecta la confirmación del proveedor con lo que termina pagando cada
 // familia: hasta ahora esa confirmación se registraba y no movía nada.
 
-export function AdminAjustes({ families, sealed, products, period, cargo }) {
+export function AdminAjustes({ families, sealed, products, period, cargos }) {
   const [ajustes, setAjustes] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -39,20 +40,13 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
   const sealedList = useMemo(() => Object.values(sealed || {}), [sealed]);
 
   // Qué se puede derivar automáticamente de lo que los proveedores confirmaron,
-  // y qué quedó ambiguo y necesita que alguien decida.
-  const { pendientes, aRepartir } = useMemo(() => {
-    if (!period) return { pendientes: [], aRepartir: [] };
-    const todos = [];
-    const reparto = [];
-    ordenes.filter(o => o.status === 'confirmada').forEach(orden => {
-      const d = derivarDeConfirmacion({ orden, sealedOrders: sealedList, period, productos: products });
-      todos.push(...d.automaticos);
-      reparto.push(...d.aRepartir);
-    });
-    // Los que ya existen no se vuelven a proponer.
-    const yaHay = new Set(ajustes.filter(a => a.type === 'no_confirmado').map(a => a.family_id + '|' + a.product_id));
-    return { pendientes: todos.filter(a => !yaHay.has(a.family_id + '|' + a.product_id)), aRepartir: reparto };
-  }, [ordenes, sealedList, period, products, ajustes]);
+  // y qué quedó ambiguo y necesita que alguien decida. El cálculo vive en
+  // `calculos.js` porque Retiros lee exactamente lo mismo para decidir si deja
+  // marcar la entrega.
+  const { pendientes, aRepartir } = useMemo(
+    () => pendientesDeConfirmacion({ ordenes, sealedOrders: sealedList, period, productos: products, ajustes }),
+    [ordenes, sealedList, period, products, ajustes]
+  );
 
   const aplicarDeProveedores = async () => {
     if (!pendientes.length) return;
@@ -276,7 +270,7 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
       {conPedido.map(f => {
         const ord = sealed[f.id];
         const propios = porFamilia.get(f.id) || [];
-        const cuenta = cuentaDeFamilia({ ord, ajustes: propios, cargo, saldo: f.balance || 0 });
+        const cuenta = cuentaDeFamilia({ ord, ajustes: propios, cargo: cargos.de(f.id), saldo: f.balance || 0 });
         const abierto = expand === f.id;
         const editando = form && form.familyId === f.id;
 
@@ -311,7 +305,11 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
                 <div style={{ marginBottom: '12px' }}>
                   {[
                     { l: 'Subtotal productos', v: cuenta.subtotal, mostrar: true },
-                    { l: 'Cargo fijo', v: cuenta.cargo, mostrar: cuenta.cargo > 0 },
+                    ...cargos.desgloseDe(f.id).map(c => ({
+                      l: c.name + (c.exenta ? ' — exenta' : ''),
+                      v: c.exenta ? 0 : c.amount,
+                      mostrar: true,
+                    })),
                     { l: '📭 No confirmados', v: cuenta.noConfirmados, mostrar: cuenta.noConfirmados !== 0 },
                     { l: '❗ Faltantes', v: cuenta.faltantes, mostrar: cuenta.faltantes !== 0 },
                     { l: '➕ Extras', v: cuenta.extras, mostrar: cuenta.extras !== 0 },
@@ -370,17 +368,34 @@ export function AdminAjustes({ families, sealed, products, period, cargo }) {
                     <p style={{ fontSize: '12px', fontWeight: 700, color: TIPOS[form.type].color, margin: '0 0 8px' }}>
                       {TIPOS[form.type].ic} {TIPOS[form.type].label} — {TIPOS[form.type].descripcion}
                     </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '8px' }}>
-                      <select value={form.productId} onChange={e => { setForm(p => ({ ...p, productId: e.target.value })); setFormErr(''); }}
-                        style={{ padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px' }}>
-                        <option value="">— Producto —</option>
-                        {opcionesProducto(f.id, form.type).map(p => (
-                          <option key={p.id} value={p.id}>{p.name} ({p.unit}) · {clp(p.price)}</option>
-                        ))}
-                      </select>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '8px', alignItems: 'start' }}>
+                      <BuscadorProducto
+                        productos={opcionesProducto(f.id, form.type)}
+                        value={form.productId}
+                        onChange={prod => { setForm(p => ({ ...p, productId: prod ? prod.id : '' })); setFormErr(''); }}
+                        autoFocus
+                        placeholder={form.type === 'extra'
+                          ? 'Escribe para buscar en todo el maestro...'
+                          : 'Escribe para buscar en lo que pidió...'}
+                        vacio={form.type === 'extra'
+                          ? 'No hay productos cargados en el maestro'
+                          : 'Esta familia no tiene productos en su pedido'}
+                        subtitulo={(() => {
+                          if (form.type === 'extra' || !form.productId) return null;
+                          const it = parseItems(sealed[f.id]).find(i => String(i.id) === String(form.productId));
+                          return it ? 'Pidió ' + it.qty + ' ' + (it.u || '') : null;
+                        })()}
+                        detalleDe={form.type === 'extra' ? null : (p) => {
+                          // Para un faltante, la cifra útil no es el precio sino
+                          // cuánto pidió esta familia: es el techo de lo que se
+                          // le puede marcar como faltante.
+                          const it = parseItems(sealed[f.id]).find(i => String(i.id) === String(p.id));
+                          return <>pidió {it ? it.qty : 0} · {clp(p.price)}</>;
+                        }}
+                      />
                       <input type="number" step="0.5" min="0" placeholder="Cantidad" value={form.qty}
                         onChange={e => { setForm(p => ({ ...p, qty: e.target.value })); setFormErr(''); }}
-                        style={{ padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px' }} />
+                        style={{ padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px', boxSizing: 'border-box' }} />
                     </div>
                     <input type="text" placeholder="Nota (opcional): llegó en mal estado, se acordó con..., etc."
                       value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))}
