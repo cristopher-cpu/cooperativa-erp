@@ -17,7 +17,7 @@ import { AdminAjustes } from './AdminAjustes';
 import { AdminReportes } from './AdminReportes';
 import { AdminImportar } from './AdminImportar';
 import { FamiliaAjustes } from './FamiliaAjustes';
-import { esDelPanel, tabsVisibles, etiquetasDe, esAdmin, tieneRol } from './perfiles';
+import { esDelPanel, tabsVisibles, etiquetasDe, esAdmin, tieneRol, rolesDe } from './perfiles';
 
 function App() {
   const [families, setFamilies] = useState([]);
@@ -1168,10 +1168,19 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
   const [tab, setTab] = useState('dashboard');
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
 
-  // OJO: esto excluye a las familias administradoras, que también piden. Es la
-  // deuda técnica anotada en docs/FASE-2.md §8 — arreglarla cambia a quién se le
-  // cobra plata al cerrar el período, y esa decisión es de la cooperativa.
-  const na = families.filter(f => f.role === 'familia');
+  // Quién es socia que pide. **Todas**, incluidas las que están en una comisión.
+  //
+  // Antes esto filtraba por `f.role === 'familia'`, y como `role` se sincroniza
+  // en 'admin' para quien administra, las tres administradoras quedaban fuera de
+  // todas las listas del panel: de los pedidos, de los retiros, de los saldos y
+  // —lo grave— del bucle que cobra al cerrar el período. Pedían, se les compraba,
+  // y no se les descontaba.
+  //
+  // Resuelto el 18-sep-2026 por la cooperativa: **todas iguales**, compran y
+  // pagan en tiempo y forma. `rolesDe()` devuelve la lista de perfiles, y la
+  // migración 005 dejó 'familia' en todas, así que administrar es un perfil que
+  // se suma al de socia, no uno que lo reemplaza.
+  const na = families.filter(f => rolesDe(f).includes('familia'));
 
   // Eximir a una familia de un cargo mueve plata de la cooperativa. La
   // cooperativa pidió que lo decidan Administración y Balance Contable; los

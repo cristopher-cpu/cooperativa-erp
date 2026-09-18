@@ -15,7 +15,10 @@ import { AdminCargos, ResumenDelPeriodo } from './AdminCargos';
 
 export function AdminDashboard({ families, sealed, cargos, setTab, period }) {
   const [expandedFam, setExpandedFam] = useState(null);
-  // Only count orders belonging to actual familias (excludes an admin's own "Mi pedido")
+  // Solo pedidos de socias que siguen en el padrón. Antes esto dejaba fuera el
+  // pedido propio de una administradora; desde que todas cuentan igual (18-sep-2026)
+  // la lista que llega ya las incluye, y lo único que descarta es un pedido
+  // huérfano de alguien que ya no está.
   const famSealed = Object.entries(sealed).filter(([fid]) => families.some(f => f.id === fid));
   const sc = famSealed.length;
   const ret = famSealed.filter(([, o]) => o.retired).length;
@@ -1385,7 +1388,15 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargos, reca
   const [showHistory, setShowHistory] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState(null);
 
-  const na = families.filter(f => f.role === 'familia');
+  // Quiénes pagan al cerrar el período: **todas las socias**, incluidas las que
+  // están en una comisión. Este es el lugar donde la lista se convierte en
+  // plata, y el que estaba mal: con `f.role === 'familia'` las administradoras
+  // quedaban fuera del bucle de cobro, así que pedían, se les compraba y no se
+  // les descontaba. Además el resumen del cierre sumaba sus pedidos al total
+  // recaudado, así que el cierre no cuadraba con lo cobrado.
+  //
+  // Resuelto el 18-sep-2026 por la cooperativa: todas iguales.
+  const na = families.filter(f => rolesDe(f).includes('familia'));
   const sc = Object.keys(sealed).filter(fid => na.some(f => f.id === fid)).length;
   const pct = na.length > 0 ? Math.round(sc / na.length * 100) : 0;
 
@@ -2132,7 +2143,9 @@ export function AdminAnalytics({ families = [], products = [] }) {
     });
   }, []);
 
-  const famList = useMemo(() => families.filter(f => f.role === 'familia'), [families]);
+  // Todas las socias, incluidas las de comisión: si no, la analítica cuenta 14
+  // familias donde hay 17 y todos los promedios por familia salen inflados.
+  const famList = useMemo(() => families.filter(f => rolesDe(f).includes('familia')), [families]);
   const famById = useMemo(() => { const m = {}; families.forEach(f => { m[f.id] = f; }); return m; }, [families]);
   const famName = id => (famById[id] && famById[id].name) || 'Familia';
   const prodCat = useMemo(() => { const m = {}; products.forEach(p => { m[p.id] = p.category; }); return m; }, [products]);

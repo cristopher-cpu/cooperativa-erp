@@ -307,13 +307,14 @@ vez de cobrar cero en silencio.
 Migración: `007_cargos_multiples_y_exenciones.sql`. Si no se ejecuta, se sigue
 cobrando el cargo único que ya estaba y el panel explica qué falta.
 
-**Pendiente que esto dejó a la vista:** `ResumenDelPeriodo` cuenta a las familias
-administradoras (usa `rolesDe(f).includes('familia')`, que es lo correcto: también
-piden), pero el bucle de cobro de `handleClosePeriod` sigue usando
-`f.role === 'familia'` y las omite. Antes la discrepancia estaba escondida; ahora
-se ve como una diferencia entre lo que debería recaudar y lo que se cobra. Es la
-deuda técnica de §8 y **sigue pendiendo de una decisión de la cooperativa**,
-porque arreglarla cambia a quién se le cobra plata.
+**Lo que esto dejó a la vista, y que ya se resolvió:** `ResumenDelPeriodo` cuenta
+a las familias administradoras (usa `rolesDe(f).includes('familia')`, que es lo
+correcto: también piden), mientras el bucle de cobro de `handleClosePeriod` usaba
+`f.role === 'familia'` y las omitía. La discrepancia estaba escondida y acá pasó
+a verse como una diferencia entre lo que debería recaudar y lo que se cobra.
+
+**La cooperativa lo decidió el 18-sep-2026: todas iguales, compran y pagan en
+tiempo y forma.** Las dos cifras ahora salen de la misma lista. Ver §8.
 
 ### Etapa 5 — Reportes Excel ✅ (18-sep-2026)
 
@@ -551,18 +552,31 @@ Dos riesgos conocidos y aceptados:
   P109 está cerrado, así que no afecta al período activo, pero el camino que lo
   produjo sigue abierto. Falta una restricción de unicidad en
   `(period_id, family_id)` y decidir qué hacer con las tres filas históricas.
-- **A las familias administradoras no se les cobra al cerrar el período.**
-  Detectado el 13-sep-2026. `AdminPeriodo` arma su lista con
-  `families.filter(f => f.role === 'familia')`, y las tres administradoras
-  (Fabián, Patricia, Ruby) son socias que también piden. El resumen del cierre
-  suma sus pedidos al total recaudado, pero el loop que descuenta saldos las
-  omite: **piden, se les compra, y no se les descuenta**.
+- ~~**A las familias administradoras no se les cobra al cerrar el período.**~~
+  **RESUELTO el 18-sep-2026 por decisión de la cooperativa: todas iguales,
+  compran y pagan en tiempo y forma.**
 
-  Arreglarlo es de una línea ahora que existe `perfiles.js` —
-  `rolesDe(f).includes('familia')`, que la migración 005 dejó verdadero para
-  todas. No se tocó junto con la etapa 4b porque cambia a quién se le cobra
-  plata, y eso lo decide la cooperativa, no el código. Mismo patrón en
-  `App.js:1008`, `AdminComponents.js:333` y `AdminComponents.js:1869`.
+  Qué pasaba: `AdminPeriodo` armaba su lista con
+  `families.filter(f => f.role === 'familia')`, y `role` se sincroniza en
+  'admin' para quien administra, así que las administradoras quedaban fuera de
+  **todas** las listas del panel —pedidos, retiros, saldos— y del bucle que
+  descuenta al cerrar. Pedían, se les compraba, y no se les descontaba. El
+  resumen del cierre sí sumaba sus pedidos al total recaudado, de modo que el
+  cierre nunca cuadraba con lo cobrado.
+
+  Se cambió a `rolesDe(f).includes('familia')` en los tres lugares:
+  `App.js` (la lista `na` que alimenta todo el panel), `AdminComponents.js`
+  (`AdminPeriodo`, que es donde la lista se convierte en plata) y la analítica
+  —que contaba 14 familias donde hay 17 e inflaba todos los promedios por
+  familia—. Administrar es un perfil que **se suma** al de socia, no uno que lo
+  reemplaza.
+
+  **No hubo deuda histórica que reconciliar.** Verificado contra la base el
+  18-sep-2026: existen 3 pedidos sellados en total, los tres en el período
+  activo («Prueba MVP») y ninguno con `charged_at`, porque ese período todavía
+  no se ha cerrado. Los períodos anteriores no tienen pedidos. Así que el
+  cambio aplica desde el primer cierre y no deja nada pendiente de cobrar hacia
+  atrás.
 - El build ya compila limpio con `CI=true` (los dos avisos de `useMemo` en
   `App.js` se corrigieron envolviendo `cart` y `ordItems`). `vercel.json` sigue
   usando `CI=false` para que un aviso nuevo no bote un despliegue en medio de
@@ -720,11 +734,9 @@ tengan que recordar credenciales.
    Sí se corrigió que lo dado de baja por merma cuente como no disponible
    (`disponibleEnBodega`): antes un producto que se echó a perder seguía
    apareciendo para reservar.
-6. **El resumen del cierre no cuadra con lo cobrado.** `totalValue` incluye el
-   pedido propio del admin; el bucle de cobro solo recorre familias. **Ahora la
-   discrepancia se VE** en vez de estar escondida: el resumen de Flujo de Caja
-   (etapa 4c) cuenta con `rolesDe(f).includes('familia')` —que es lo correcto,
-   las administradoras también piden— mientras `handleClosePeriod` sigue usando
-   `f.role === 'familia'` y las omite. Arreglarlo es de una línea, y **sigue
-   pendiendo de una decisión de la cooperativa** porque cambia a quién se le
-   cobra plata.
+6. ~~**El resumen del cierre no cuadra con lo cobrado.**~~ **RESUELTO el
+   18-sep-2026.** `totalValue` sumaba los pedidos de todas y el bucle de cobro
+   solo recorría a las que tenían `role === 'familia'`, así que las
+   administradoras entraban en el total recaudado y no en el cobro. Las dos
+   cifras ahora salen de la misma lista (`rolesDe(f).includes('familia')`), que
+   incluye a las socias de comisión. Ver §8.
