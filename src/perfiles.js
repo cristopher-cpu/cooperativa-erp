@@ -57,11 +57,16 @@ export const PERFILES = {
 // Recepción y Retiro se separan a propósito: Recepción necesita el consolidado
 // para cotejar contra lo que llega, y Retiro necesita los faltantes y extras del
 // día de la entrega. Se solapan en Bodega, que es donde ambas trabajan.
+//
+// Reportes lo ven las tres comisiones que rinden cuentas hacia afuera:
+// Proveedores (qué comprarle a cada uno), Retiro (faltantes y extras) y Balance
+// Contable (todo el resto). Recepción no: su trabajo es de un día y se apoya en
+// el consolidado en pantalla, no en planillas de períodos cerrados.
 const TABS_POR_PERFIL = {
-  proveedores: ['dashboard', 'consolidado', 'proveedores', 'productos', 'bodega'],
+  proveedores: ['dashboard', 'consolidado', 'proveedores', 'productos', 'bodega', 'reportes'],
   recepcion:   ['dashboard', 'consolidado', 'retiros', 'bodega'],
-  retiro:      ['dashboard', 'retiros', 'ajustes', 'bodega', 'pedidos'],
-  contable:    ['dashboard', 'analitica', 'flujo', 'saldos', 'pedidos'],
+  retiro:      ['dashboard', 'retiros', 'ajustes', 'bodega', 'pedidos', 'reportes'],
+  contable:    ['dashboard', 'analitica', 'flujo', 'saldos', 'pedidos', 'reportes'],
   familia:     [],
 };
 

@@ -14,6 +14,7 @@ import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros
 import { AdminProveedores } from './AdminProveedores';
 import { AdminConsolidado } from './AdminConsolidado';
 import { AdminAjustes } from './AdminAjustes';
+import { AdminReportes } from './AdminReportes';
 import { FamiliaAjustes } from './FamiliaAjustes';
 import { esDelPanel, tabsVisibles, etiquetasDe, esAdmin, tieneRol } from './perfiles';
 
@@ -1110,6 +1111,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
     { id: 'productos', l: 'Productos', ic: '🏷️' },
     { id: 'saldos', l: 'Saldos', ic: '💳' },
     { id: 'periodo', l: 'Período', ic: '📅' },
+    { id: 'reportes', l: 'Reportes', ic: '📗' },
     { id: 'actividad', l: 'Actividad', ic: '📝' },
   ];
 
@@ -1203,6 +1205,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         {tabActiva === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}
         {tabActiva === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargos={cargos} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
         {tabActiva === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargos={cargos} recargarCargos={recargarCargos} currentAdmin={user} />}
+        {tabActiva === 'reportes' && <AdminReportes families={families} products={products} providers={providers} currentAdmin={user} period={period} />}
         {tabActiva === 'actividad' && <AdminLogs />}
       </div>
     </div>
