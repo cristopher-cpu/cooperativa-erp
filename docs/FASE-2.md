@@ -315,28 +315,108 @@ se ve como una diferencia entre lo que debería recaudar y lo que se cobra. Es l
 deuda técnica de §8 y **sigue pendiendo de una decisión de la cooperativa**,
 porque arreglarla cambia a quién se le cobra plata.
 
-### Etapa 5 — Reportes Excel
+### Etapa 5 — Reportes Excel ✅ (18-sep-2026)
 
-Consolidado por familia, por proveedor, de faltantes, de extras, stock de bodega,
-cantidad de familias. **Deben seguir disponibles para períodos cerrados**: se leen
-de las tablas vivas filtrando por `period_id`, no del resumen JSON que se guarda al
-cerrar (que es un extracto parcial).
+Cinco planillas, de cualquier período, activo o cerrado: consolidado por familia
+(con el detalle línea por línea), por proveedor, faltantes y extras, stock de
+bodega y padrón de familias. Más un botón que las descarga todas en un archivo,
+que es lo que se manda por correo a fin de ciclo.
 
-### Etapa 6 — Carga masiva de precios + normalización de unidades
+Se leen las tablas vivas filtrando `period_id`, **no** `periods.summary`: ese
+resumen tiene los totales por familia pero no las líneas, ni los faltantes, ni la
+bodega. Así un período cerrado da el mismo detalle que el activo.
 
-Importar planillas por proveedor o un consolidado.
+Cada archivo abre con una hoja de **portada** que dice de qué período es, qué
+cargos tenía, qué exenciones había y cuándo se generó. Sin eso, dos reportes en
+la misma carpeta son indistinguibles.
+
+**Límite que no se puede resolver leyendo mejor.** En un período cerrado, las
+columnas de saldo muestran el saldo de *hoy*: `families.balance` es un solo
+número que se va actualizando, no una serie. La cifra que manda ahí es
+**Cobrado al cerrar** (`sealed_orders.charged_amount`), que quedó escrita en el
+pedido ese día. El reporte lo advierte en la portada y el panel también.
+
+**Sin dependencias nuevas.** `xlsx` pesa ~400 KB y la app entera son ~187:
+sumar una librería más grande que el producto, para escribir planillas de
+diecisiete filas, se paga con el tiempo de carga de cada socia en un celular.
+`src/excel.js` arma el ZIP a mano con método 0 (sin comprimir), que evita tener
+que implementar deflate; con los volúmenes reales eso son decenas de KB.
+
+Verificado abriendo el archivo generado en Excel 16: hojas, nombres saneados y
+deduplicados, encabezados en negrita, montos con formato chileno, autofiltro,
+acentos y escapes XML. La primera versión del directorio central del ZIP estaba
+**2 bytes corta** —se habían fundido «atributos internos» con «atributos
+externos»— y ningún lector la aceptaba, con un mensaje de error que no decía
+nada del problema real. Los 46 bytes van comentados uno por uno.
+
+### Etapa 6 — Carga masiva de precios + normalización de unidades ✅ (18-sep-2026)
 
 Sobre las unidades: `unit` es el **formato de venta**, no una unidad de medida.
-"500 gr" significa bolsa de medio kilo y `price` es el precio de esa bolsa. Hay **24
-variantes de texto libre** para lo que son 5 unidades canónicas.
+"500 gr" significa bolsa de medio kilo y `price` es el precio de esa bolsa. Hay
+**24 variantes de texto libre** para lo que son 5 unidades canónicas.
 
-**Corrección importante:** este desorden **no rompe** el consolidado por proveedor
-—agrupa por producto, y cada producto arrastra su propio formato— pero sí afecta la
-legibilidad de la orden que sale hacia afuera, impide calcular peso total por
-proveedor, y rompe el emparejamiento automático al importar precios.
+**Corrección que se mantiene:** este desorden **no rompe** el consolidado por
+proveedor —agrupa por producto, y cada producto arrastra su propio formato— pero
+sí afecta la legibilidad de la orden que sale hacia afuera, impide calcular peso
+total por proveedor, y rompe el emparejamiento al importar precios.
 
-Propuesta: separar en `format_qty` (número) + `format_unit` (canónica: `gr`, `kg`,
-`ml`, `lt`, `un`). `500 cc` → `500 ml`. `Kg`/`1 Kg`/`Kilo` → `1 kg`.
+**Lo construido: se AGREGAN `format_qty` + `format_unit`, y `unit` no se toca.**
+
+Cambió respecto de la propuesta original, que hablaba de "separar". No se
+reescribe `unit` por dos razones que pesan:
+
+1. "24 rollos" canonizado es "24 un", y eso pierde información real: quien
+   recibe la caja necesita saber que son rollos. Lo mismo "Caja 3 un". La
+   etiqueta que lee una persona y la que usa una cuenta no son la misma cosa.
+2. `sealed_orders.items` tiene el formato congelado adentro. Reescribir `unit`
+   haría que un pedido viejo y el maestro dijeran cosas distintas del mismo
+   producto — justo lo que la foto en JSONB existe para evitar.
+
+De los 24 formatos reales, **21 se interpretan sin ambigüedad**. Los otros 3
+son `Kg`, `Kilo` y `un`, que no traen número: se asume 1 y se marcan como
+revisables. Un formato compuesto como "3 bandejas de 500 gr" se marca de
+confianza **baja** a propósito: la primera versión del parser devolvía "3 un"
+con toda la seguridad del mundo, tirando el peso en silencio. Una respuesta
+confiada y equivocada es peor que no responder, porque nadie la va a ir a
+revisar. La normalización se aprueba desde el panel, nunca en la migración.
+
+**Dónde se cobra el beneficio** (si no, la etapa estaría a medio entregar):
+- La orden al proveedor ahora dice `1 kg` para los tres casos, y conserva el
+  paréntesis solo cuando aporta: `24 un (24 rollos)`. Una etiqueta que solo
+  repite la unidad de medida no se muestra dos veces.
+- El consolidado muestra **peso y volumen por proveedor**, y dice cuántas líneas
+  quedaron fuera: un peso que calla lo que no pudo sumar es un peso en el que no
+  se puede confiar.
+
+**La importación de precios: se pega, no se sube un .xlsx.** Leer un .xlsx exige
+descomprimir (inflate), que es mucho más código que escribirlo. En cambio, al
+copiar celdas de Excel el portapapeles ya lleva el contenido separado por
+tabuladores: seleccionar y pegar es un paso contra «guardar como, elegir formato,
+buscar el archivo». También acepta CSV.
+
+Nada se aplica solo. Cada fila sale clasificada —cambia, igual, empate,
+no está en el maestro, no se pudo leer— y los empates se resuelven en la misma
+pantalla con el buscador. Filtrar por proveedor baja mucho la ambigüedad:
+"Arroz" empareja con cuatro productos en el maestro completo y con uno en el
+catálogo de un proveedor. **Nunca se elige entre candidatos por puntaje:**
+adivinar es decidir a cuál producto se le cambia el precio, y esa apuesta la
+tiene que hacer una persona.
+
+Tres defensas que valen más que la comodidad:
+- **Precios en formato chileno.** `$1.234` son mil doscientos treinta y cuatro,
+  no uno con veintitrés. Es el error más caro posible: leer un precio mil veces
+  más chico y cobrarlo.
+- **Cambios sospechosos.** Un cambio de más de 3× se destaca aparte. Casi siempre
+  es una columna mal leída: la cooperativa sabe si el aceite subió 40%, y nadie
+  sabe si subió 4.000%.
+- **`price_history` y deshacer la importación completa.** Sin vuelta atrás nadie
+  se atreve a cambiar ochenta precios de una vez. La reversión salta los
+  productos que alguien cambió a mano después: ese cambio es más nuevo y pisarlo
+  sería descartar una decisión posterior sin avisar.
+
+Migración: `008_formato_de_venta.sql`. Agrega las dos columnas con restricción a
+las cinco canónicas, y `price_history`. No interpreta el texto: un parser en SQL
+sería un parser peor, porque no puede pedir confirmación.
 
 ### Etapa 7 — Mermas, regalos y sobrantes en bodega (nuevo, 6-sep-2026)
 

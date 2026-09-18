@@ -741,3 +741,125 @@ export async function unmarkRetired(orderId) {
   if (error) { console.error('unmarkRetired error:', error.message); return { error: error.message }; }
   return data;
 }
+
+// ─── FORMATO DE VENTA Y CARGA MASIVA DE PRECIOS ──────────────────────────────
+// Migración 008.
+
+// Normaliza el formato de venta de varios productos. NO toca `unit`: esa sigue
+// siendo la etiqueta humana ("24 rollos"), y estas dos columnas son la versión
+// con la que se calcula. Ver el encabezado de la migración 008.
+export async function normalizarFormatos(cambios) {
+  if (!cambios.length) return [];
+  const hechos = [];
+  for (const c of cambios) {
+    const { data, error } = await supabase
+      .from('products')
+      .update({ format_qty: c.qty, format_unit: c.unit })
+      .eq('id', c.id)
+      .select()
+      .single();
+    if (error) {
+      console.error('normalizarFormatos error:', error.message);
+      // La restricción de la 008 rechaza una unidad que no sea canónica. Eso es
+      // un error del código que llama, no algo que el usuario pueda arreglar.
+      if (/format_unit|format_qty|column/.test(error.message)) {
+        return { error: /column/.test(error.message)
+          ? 'Falta ejecutar db/migrations/008_formato_de_venta.sql en Supabase.'
+          : error.message, hechos };
+      }
+      return { error: error.message, hechos };
+    }
+    hechos.push(data);
+  }
+  return hechos;
+}
+
+// Aplica precios nuevos, dejando en `price_history` el precio ANTERIOR.
+//
+// Uno por uno y no en lote a propósito: si falla a la mitad hay que poder decir
+// exactamente cuáles se aplicaron. Un lote que falla deja al usuario sin saber
+// si tiene que volver a importar todo o nada.
+//
+// El historial se escribe DESPUÉS del precio, y si falla no se aborta: perder el
+// registro de un cambio es malo, pero dejar el maestro a medio actualizar
+// porque una tabla de auditoría no existe todavía es peor.
+export async function aplicarPrecios(cambios, { batchId, quien, quienNombre, source = 'importacion', note = null } = {}) {
+  const hechos = [];
+  const fallidos = [];
+  let sinHistorial = false;
+
+  for (const c of cambios) {
+    const { data, error } = await supabase
+      .from('products')
+      .update({ price: c.precio })
+      .eq('id', c.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('aplicarPrecios error:', error.message);
+      fallidos.push({ ...c, error: error.message });
+      continue;
+    }
+    hechos.push(data);
+
+    const h = await supabase.from('price_history').insert([{
+      product_id: c.id,
+      price_before: c.precioAnterior,
+      price_after: c.precio,
+      source,
+      batch_id: batchId || null,
+      changed_by: quien || null,
+      changed_by_name: quienNombre || null,
+      note,
+    }]);
+    if (h.error) sinHistorial = true;
+  }
+
+  return { hechos, fallidos, sinHistorial };
+}
+
+export async function getPriceHistory(productId = null, limite = 200) {
+  let q = supabase.from('price_history').select('*').order('created_at', { ascending: false }).limit(limite);
+  if (productId != null) q = q.eq('product_id', productId);
+  const { data, error } = await q;
+  // null cuando la tabla no existe: quien llama distingue "sin cambios" de
+  // "falta la migración".
+  if (error) { console.error('getPriceHistory error:', error.message); return null; }
+  return data || [];
+}
+
+// Deshacer una importación completa. Es la red que hace tolerable cambiar
+// ochenta precios de una vez: sin vuelta atrás, nadie se atreve a usarlo.
+//
+// Solo revierte los productos cuyo precio sigue siendo el que dejó la
+// importación. Si alguien lo cambió después a mano, ese cambio es más nuevo y
+// pisarlo sería descartar una decisión posterior sin avisar.
+export async function revertirImportacion(batchId) {
+  const { data: filas, error } = await supabase
+    .from('price_history').select('*').eq('batch_id', batchId);
+  if (error) { console.error('revertirImportacion error:', error.message); return { error: error.message }; }
+  if (!filas || !filas.length) return { error: 'No se encontró esa importación.' };
+
+  const revertidos = [], saltados = [];
+  for (const f of filas) {
+    const { data: prod } = await supabase.from('products').select('id,name,price').eq('id', f.product_id).single();
+    if (!prod) { saltados.push({ ...f, motivo: 'el producto ya no existe' }); continue; }
+    if (Number(prod.price) !== Number(f.price_after)) {
+      saltados.push({ ...f, nombre: prod.name, precioActual: prod.price, motivo: 'cambió después de la importación' });
+      continue;
+    }
+    const r = await supabase.from('products').update({ price: f.price_before }).eq('id', f.product_id).select().single();
+    if (r.error) { saltados.push({ ...f, nombre: prod.name, motivo: r.error.message }); continue; }
+    revertidos.push(r.data);
+    await supabase.from('price_history').insert([{
+      product_id: f.product_id,
+      price_before: f.price_after,
+      price_after: f.price_before,
+      source: 'reversion',
+      batch_id: batchId + '-revertido',
+      note: 'Reversión de la importación ' + batchId,
+    }]);
+  }
+  return { revertidos, saltados };
+}

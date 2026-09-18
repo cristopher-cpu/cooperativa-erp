@@ -63,7 +63,7 @@ export const PERFILES = {
 // Contable (todo el resto). Recepción no: su trabajo es de un día y se apoya en
 // el consolidado en pantalla, no en planillas de períodos cerrados.
 const TABS_POR_PERFIL = {
-  proveedores: ['dashboard', 'consolidado', 'proveedores', 'productos', 'bodega', 'reportes'],
+  proveedores: ['dashboard', 'consolidado', 'proveedores', 'productos', 'bodega', 'reportes', 'importar'],
   recepcion:   ['dashboard', 'consolidado', 'retiros', 'bodega'],
   retiro:      ['dashboard', 'retiros', 'ajustes', 'bodega', 'pedidos', 'reportes'],
   contable:    ['dashboard', 'analitica', 'flujo', 'saldos', 'pedidos', 'reportes'],

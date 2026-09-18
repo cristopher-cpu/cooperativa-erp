@@ -29,6 +29,56 @@ function parseItems(ord) {
   try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
 }
 
+// Cómo se escribe el formato en la orden que el proveedor recibe.
+//
+// El maestro tiene 24 maneras de escribir cinco unidades, y entre ellas "Kg",
+// "1 Kg" y "Kilo". Un proveedor que recibe tres formatos distintos para lo
+// mismo tiene que preguntar, y preguntar por correo cuesta un día.
+//
+// Cuando la migración 008 ya corrió y el producto está normalizado, se usa la
+// versión canónica. Si no, se manda el texto tal cual: es lo que se mandaba
+// antes y no empeora nada. No se interpreta acá — adivinar en el borde que
+// habla con afuera es el peor lugar para adivinar.
+
+// Maneras de escribir una unidad de MEDIDA. Lo que no está acá es una palabra
+// de envase —rollos, caja, bolsa, paquete— y esas sí hay que conservarlas: la
+// diferencia entre "24 un" y "24 rollos" es lo que el proveedor despacha.
+//
+// Duplica parte de src/unidades.js a propósito: ese archivo es del bundle de
+// React y aquí no se puede importar. Si se agregan sinónimos de medida allá,
+// conviene agregarlos acá.
+const MEDIDAS = new Set([
+  'gr', 'g', 'grs', 'gramo', 'gramos',
+  'kg', 'k', 'kgs', 'kilo', 'kilos', 'kilogramo', 'kilogramos',
+  'ml', 'cc', 'mililitro', 'mililitros',
+  'lt', 'l', 'lts', 'litro', 'litros',
+  'un', 'u', 'uni', 'unid', 'unidad', 'unidades',
+]);
+
+function formatoParaProveedor(prod) {
+  const qty = prod.format_qty;
+  const unit = prod.format_unit;
+  if (qty == null || !unit) return prod.unit || '';
+
+  const n = Number(qty);
+  const num = Number.isInteger(n) ? String(n) : String(n).replace('.', ',');
+  const canonico = num + ' ' + unit;
+
+  const original = String(prod.unit || '').trim();
+  if (!original) return canonico;
+
+  // El paréntesis se agrega solo cuando la etiqueta original dice algo que la
+  // canónica pierde. "Kg" y "1 kg" son lo mismo y repetirlo es ruido; "24
+  // rollos" y "24 un" no lo son.
+  const palabras = original
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z]+/).filter(Boolean);
+  const aporta = palabras.some(p => !MEDIDAS.has(p));
+
+  return aporta ? canonico + ' (' + original + ')' : canonico;
+}
+
 // Agrupa los pedidos sellados del período y se queda con los productos de este
 // proveedor. Es la misma lógica que muestra la pestaña Consolidado, pero acá es
 // la que manda: si difieren, la verdad es esta.
@@ -51,7 +101,7 @@ function construirLineas(sealedOrders, productosDelProveedor) {
         porProducto.set(prod.id, {
           product_id: prod.id,
           name: prod.name,
-          unit: prod.unit || '',
+          unit: formatoParaProveedor(prod),
           price: Number(prod.price) || 0,
           qty: 0,
           subtotal: 0,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getPurchaseOrders, sendPurchaseOrder, deletePurchaseOrder, confirmarOrdenManual } from './supabaseClient';
 import { ordenesVencidasSinConfirmar, estadoPedidos } from './calculos';
+import { pesoTotal } from './unidades';
 
 // ─── CONSOLIDADO Y ÓRDENES DE COMPRA ─────────────────────────────────────────
 // Responde la pregunta que hasta ahora se hacía a mano: cuánto hay que comprarle
@@ -80,6 +81,9 @@ export function AdminConsolidado({ families, sealed, products, providers, period
         const line = g.lines.get(pid);
         line.qty += item.qty;
         line.subtotal = Math.round(line.qty * line.price);
+        // El formato estructurado viene del maestro (migración 008). Se guarda
+        // en la línea para poder sumar peso más abajo.
+        if (prod) { line.format_qty = prod.format_qty; line.format_unit = prod.format_unit; }
         const fam = families.find(f => f.id === famId);
         line.porFamilia.push({ name: (fam && fam.name) || famId, qty: item.qty });
       });
@@ -88,7 +92,16 @@ export function AdminConsolidado({ families, sealed, products, providers, period
     return Array.from(byProvider.values())
       .map(g => {
         const lines = Array.from(g.lines.values()).sort((a, b) => a.name.localeCompare(b.name));
-        return { ...g, lines, total: lines.reduce((s, l) => s + l.subtotal, 0), familiesCount: g.families.size };
+        return {
+          ...g, lines,
+          total: lines.reduce((s, l) => s + l.subtotal, 0),
+          familiesCount: g.families.size,
+          // Cuánto se le compra en peso y volumen. Es lo que se necesita para
+          // saber si cabe en el auto de alguien y para cotejar contra la guía de
+          // despacho, y hasta que los formatos se normalizaron no se podía
+          // calcular: "Kg" no es un número.
+          peso: pesoTotal(lines.map(l => ({ ...l, cantidad: l.qty }))),
+        };
       })
       .sort((a, b) => b.total - a.total);
   }, [sealed, products, providers, families]);
@@ -405,6 +418,28 @@ export function AdminConsolidado({ families, sealed, products, providers, period
                 </div>
                 <p style={{ fontSize: '11px', color: '#888', margin: '4px 0 0' }}>
                   {g.lines.length} producto{g.lines.length === 1 ? '' : 's'} · {g.familiesCount} familia{g.familiesCount === 1 ? '' : 's'}
+                  {/* Peso y volumen: para saber si cabe en el auto de alguien y
+                      para cotejar contra la guía de despacho. Solo aparece si
+                      hay formatos normalizados (migración 008); un peso que
+                      calla lo que dejó fuera es un peso en el que no se puede
+                      confiar, así que se dice cuántas líneas no se pudieron
+                      sumar. */}
+                  {(g.peso.gr > 0 || g.peso.ml > 0) && (
+                    <span title={
+                      (g.peso.sinPeso ? g.peso.sinPeso + ' línea(s) se cuentan por unidad y no se pesan. ' : '') +
+                      (g.peso.sinFormato ? g.peso.sinFormato + ' línea(s) sin formato normalizado quedaron fuera.' : '')
+                    }>
+                      {' · '}
+                      {g.peso.gr > 0 && (g.peso.kg >= 1 ? g.peso.kg.toFixed(1) + ' kg' : g.peso.gr + ' gr')}
+                      {g.peso.gr > 0 && g.peso.ml > 0 && ' + '}
+                      {g.peso.ml > 0 && (g.peso.lt >= 1 ? g.peso.lt.toFixed(1) + ' lt' : g.peso.ml + ' ml')}
+                      {(g.peso.sinPeso > 0 || g.peso.sinFormato > 0) && (
+                        <span style={{ color: '#e65100' }}>
+                          {' +'}{g.peso.sinPeso + g.peso.sinFormato} sin pesar
+                        </span>
+                      )}
+                    </span>
+                  )}
                   {sinCorreo && <span style={{ color: '#c62828', fontWeight: 600 }}> · sin correo cargado</span>}
                 </p>
               </div>
