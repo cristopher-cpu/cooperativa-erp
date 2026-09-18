@@ -23,7 +23,7 @@
 
 const { sb } = require('./_lib/db');
 const { hashPin, validarPin } = require('./_lib/pin');
-const { delRequest } = require('./_lib/sesion');
+const { delRequest, haySecreto } = require('./_lib/sesion');
 
 // Mismo criterio que /api/login y que src/perfiles.js: lo que la cuenta PUEDE
 // VER, no la etiqueta heredada de cuando los roles eran uno solo.
@@ -48,18 +48,35 @@ module.exports = async (req, res) => {
     if (!familyId) return res.status(400).json({ error: 'Falta la familia' });
 
     // ── Quién llama ─────────────────────────────────────────────────────────
+    //
+    // Si SUPABASE_JWT_SECRET no está configurado, no existe el mecanismo de
+    // sesión: nadie puede tener token, así que exigirlo no protegería nada —
+    // haría imposible asignar PIN, que es justamente el paso previo a poder
+    // encender RLS. Se degrada, igual que la exigencia de PIN en /api/login
+    // cuando falta la migración 003: un control que el sistema todavía no puede
+    // sostener no lo deja seguro, lo deja inutilizable.
+    //
+    // No es un agujero nuevo: es exactamente cómo estaba este endpoint antes.
+    // Y se cierra solo en cuanto exista la variable.
     const sesion = delRequest(req);
-    if (!sesion) {
+    if (!sesion && haySecreto()) {
       return res.status(401).json({
         error: 'Sesión no válida o vencida. Vuelve a entrar y reinténtalo.',
       });
     }
-    const esAdmin = Array.isArray(sesion.roles) && sesion.roles.includes('admin');
-    const esSuPropio = String(sesion.family_id) === String(familyId);
-    if (!esAdmin && !esSuPropio) {
-      return res.status(403).json({
-        error: 'Solo Administración puede cambiar el PIN de otra familia.',
-      });
+    if (!sesion) {
+      console.warn('set-pin: falta SUPABASE_JWT_SECRET, no se verifica quién llama');
+    }
+    // Sin sesión (solo posible si falta el secreto, por lo de arriba) no hay a
+    // quién comparar: se deja pasar, que es el comportamiento anterior.
+    if (sesion) {
+      const esAdmin = Array.isArray(sesion.roles) && sesion.roles.includes('admin');
+      const esSuPropio = String(sesion.family_id) === String(familyId);
+      if (!esAdmin && !esSuPropio) {
+        return res.status(403).json({
+          error: 'Solo Administración puede cambiar el PIN de otra familia.',
+        });
+      }
     }
 
     let filas;

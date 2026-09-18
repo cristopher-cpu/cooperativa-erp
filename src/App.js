@@ -1187,6 +1187,24 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
   // demás perfiles ven las exenciones pero no las conceden ni las quitan.
   const puedeEximir = tieneRol(user, 'admin') || tieneRol(user, 'contable');
 
+  // ── ¿Está el servidor configurado para firmar sesiones? ──────────────────
+  //
+  // Sin `SUPABASE_JWT_SECRET` el sistema funciona, pero /api/set-pin y
+  // /api/enviar-orden quedan sin verificar quién llama —degradan a propósito,
+  // porque exigir una sesión que no puede existir solo rompería esas dos
+  // funciones— y RLS no se puede encender.
+  //
+  // El riesgo real de esa degradación no es técnico: es que nadie se acuerde de
+  // configurar la variable y el sistema se quede así para siempre, pareciendo
+  // terminado. Por eso el aviso está en el panel y no solo en un archivo.
+  const [configServidor, setConfigServidor] = useState(null);
+  useEffect(() => {
+    fetch('/api/estado')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setConfigServidor(d))
+      .catch(() => { /* sin funciones serverless (npm start): se ignora */ });
+  }, []);
+
   const todasLasTabs = [
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
     { id: 'analitica', l: 'Analítica', ic: '📈' },
@@ -1281,6 +1299,31 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
           </button>
         </div>
       </div>
+
+      {/* Falta configurar el servidor. No es un error: el sistema anda igual,
+          pero sin esto la base sigue abierta a internet, así que conviene que
+          se vea todos los días hasta que esté hecho. */}
+      {configServidor && configServidor.sesionFirmada === false && (
+        <div style={{ background: '#fff8e1', borderBottom: '1px solid #ffc107', padding: '11px 1rem' }}>
+          <p style={{ fontSize: '12px', color: '#e65100', margin: 0, lineHeight: 1.6, fontWeight: 500 }}>
+            🔓 <strong>Falta el último paso de seguridad.</strong> Mientras no estén configuradas las
+            variables <code>SUPABASE_JWT_SECRET</code> y <code>SUPABASE_SERVICE_ROLE_KEY</code> en Vercel,
+            cualquiera con la dirección del sitio puede leer los correos y saldos de todas las familias.
+            Los pasos están en <code>db/migrations/010_rls_y_sesiones.sql</code>.
+            {configServidor.claveDeServicio === false && configServidor.sesionFirmada === false
+              ? ' (Faltan las dos.)'
+              : ''}
+          </p>
+        </div>
+      )}
+      {configServidor && configServidor.sesionFirmada === true && configServidor.claveDeServicio === false && (
+        <div style={{ background: '#fff8e1', borderBottom: '1px solid #ffc107', padding: '11px 1rem' }}>
+          <p style={{ fontSize: '12px', color: '#e65100', margin: 0, lineHeight: 1.6, fontWeight: 500 }}>
+            🔓 Falta <code>SUPABASE_SERVICE_ROLE_KEY</code> en Vercel. Sin ella, encender RLS dejaría a
+            todo el mundo sin poder entrar.
+          </p>
+        </div>
+      )}
 
       <div style={{ padding: '1rem' }} className="tab-panel" key={tabActiva}>
         {tabActiva === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargos={cargos} setTab={setTab} period={period} />}
