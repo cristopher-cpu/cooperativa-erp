@@ -53,7 +53,32 @@ module.exports = async (req, res) => {
       familias = await sb('/families?select=id,name,initials,pin_set_at,role&order=name');
     }
 
-    const periodos = await sb('/periods?select=id,label,month,date_from,date_to,date_delivery,date_confirm_until,date_adjust_until,orders_closed_at,active&active=is.true&limit=1');
+    // Cascada de columnas, de la más completa a la más antigua — el mismo
+    // patrón que `getFamilies` en supabaseClient.js, y por el mismo motivo: las
+    // migraciones se ejecutan a mano y pueden ir por detrás del despliegue.
+    //
+    // PostgREST rechaza la consulta ENTERA si una sola columna no existe, así
+    // que pedir el conjunto completo sin red significa que la pantalla de
+    // ingreso no carga y **nadie puede entrar**. Pasó de verdad el 18-sep-2026:
+    // la migración 006 no estaba corrida, faltaba `orders_closed_at`, y este
+    // endpoint respondía 500.
+    const PERIOD_COLS = 'id,label,month,date_from,date_to,date_delivery,active';
+    const CASCADA = [
+      PERIOD_COLS + ',date_confirm_until,date_adjust_until,orders_closed_at', // con 006
+      PERIOD_COLS + ',date_confirm_until,date_adjust_until',                  // con 004
+      PERIOD_COLS,                                                            // esquema original
+    ];
+
+    let periodos = null;
+    for (let i = 0; i < CASCADA.length; i++) {
+      try {
+        periodos = await sb('/periods?select=' + CASCADA[i] + '&active=is.true&limit=1');
+        break;
+      } catch (e) {
+        if (i === CASCADA.length - 1) throw e;
+        console.warn('portada: faltan columnas de una migración en periods, reintentando con menos:', e.message);
+      }
+    }
 
     res.setHeader('Cache-Control', 'public, max-age=' + CACHE_SEGUNDOS);
     return res.status(200).json({
