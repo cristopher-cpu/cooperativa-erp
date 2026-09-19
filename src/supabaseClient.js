@@ -485,7 +485,14 @@ export async function getBodegaAssignments(periodId) {
 
 export async function addBodegaAssignment(assignment) {
   const { data, error } = await supabase.from('bodega_assignments').insert([assignment]).select().single();
-  if (error) { console.error('addBodegaAssignment error:', error.message); return null; }
+  if (error) {
+    console.error('addBodegaAssignment error:', error.message);
+    // El motivo del rechazo tiene que llegar a la pantalla. El trigger de la
+    // migración 012 rechaza una reserva que supere el stock con un mensaje
+    // escrito para una persona («Solo quedan 3 kg de Papas…»); mostrarlo como
+    // «revisa la conexión» mandaría a buscar un problema que no existe.
+    return { error: error.message };
+  }
   return data;
 }
 
@@ -1073,6 +1080,10 @@ async function saldoActual(familyId) {
 export async function asignarBodegaConCargo(assignment, saldoAntes) {
   const creada = await addBodegaAssignment(assignment);
   if (!creada) return { error: 'No se pudo asignar. Revisa la conexión e intenta de nuevo.' };
+  // La base rechazó la reserva. El caso normal es que otra familia alcanzó a
+  // tomar el stock: el mensaje del trigger ya dice cuánto queda, así que se
+  // muestra tal cual en vez de traducirlo a algo más vago.
+  if (creada.error) return { error: creada.error, rechazada: true };
 
   const esperado = (Number(saldoAntes) || 0) - (Number(assignment.total_value) || 0);
   const despues = await saldoActual(assignment.family_id);

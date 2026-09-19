@@ -1,7 +1,7 @@
 # Fase 2 — Estado, decisiones y pendientes
 
 Cooperativa de Consumo Responsable **Quilpueblo**.
-Última actualización: 18 de septiembre de 2026 (etapas 4c a 7 y autenticación real).
+Última actualización: 19 de septiembre de 2026 (RLS en producción, y la bodega ya no se sobrevende).
 
 ---
 
@@ -726,14 +726,33 @@ tengan que recordar credenciales.
    atómico, porque RLS le prohíbe a una familia escribir su propio saldo y hubo
    que reemplazarlo. Los otros siete siguen igual, y el mismo patrón —un trigger
    o una función en la base— sirve para todos.
-5. **Las reservas de bodega pueden sobrevender.** El stock disponible se calcula
-   desde el estado local; dos familias reservando a la vez ven ambas stock. El
-   *cargo* ya es atómico (punto 4), la *validación de stock* todavía no: falta
-   moverla a la base, por ejemplo con una restricción o un trigger que rechace
-   la asignación si excede lo disponible.
-   Sí se corrigió que lo dado de baja por merma cuente como no disponible
-   (`disponibleEnBodega`): antes un producto que se echó a perder seguía
-   apareciendo para reservar.
+5. ~~**Las reservas de bodega pueden sobrevender.**~~ **RESUELTO el 19-sep-2026,
+   migración `012`.** El stock disponible se calculaba desde el estado del
+   navegador, y un navegador no puede saber lo que otro está haciendo en ese
+   mismo segundo: dos familias reservando el último kilo veían ambas «queda 1».
+
+   Ahora lo valida un trigger `before insert` en `bodega_assignments`, que es la
+   única capa que ve todo a la vez. La pieza que de verdad cierra el problema es
+   el `select ... for update` sobre la fila de `bodega`: sin él, dos inserciones
+   simultáneas ejecutarían el trigger a la vez, ninguna vería la reserva de la
+   otra —todavía sin confirmar— y las dos pasarían. Sería el mismo error movido
+   de sitio.
+
+   No se usó una restricción `check` porque solo puede mirar la fila que se
+   inserta, y acá la respuesta depende de la suma de las otras: lo ya asignado y
+   lo dado de baja por merma.
+
+   El mensaje de rechazo está escrito para una persona («Solo quedan 3 kg de
+   Papas…») y llega tal cual a la pantalla: `addBodegaAssignment` devuelve el
+   error en vez de `null`, porque mostrarlo como «revisa la conexión» mandaría a
+   buscar un problema que no existe.
+
+   **Pendiente de decidir, no de programar:** la cooperativa describe la reserva
+   de bodega como *«un extra cuando se vende»*. Hoy se implementa como un cargo
+   directo al saldo. Modelarla como un ajuste de tipo `extra` la haría aparecer
+   en Faltantes y Extras y en la cuenta del período, con su estado de pago. Es
+   más coherente, pero cambia dónde queda registrada la plata, así que conviene
+   decidirlo antes de tocarlo.
 6. ~~**El resumen del cierre no cuadra con lo cobrado.**~~ **RESUELTO el
    18-sep-2026.** `totalValue` sumaba los pedidos de todas y el bucle de cobro
    solo recorría a las que tenían `role === 'familia'`, así que las
