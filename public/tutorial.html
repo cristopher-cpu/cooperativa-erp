@@ -220,11 +220,15 @@
         <a href="#admin-dashboard">Resumen</a> ·
         <a href="#admin-analitica">Analítica</a> ·
         <a href="#admin-pedidos">Pedidos</a> ·
+        <a href="#admin-consolidado">Consolidado y órdenes de compra</a> ·
         <a href="#admin-retiros">Retiros</a> ·
+        <a href="#admin-ajustes">Faltantes y Extras</a> ·
         <a href="#admin-flujo">Flujo de Caja</a> ·
         <a href="#admin-bodega">Bodega</a> ·
         <a href="#admin-familias">Familias</a> ·
         <a href="#admin-productos">Productos</a> ·
+        <a href="#admin-importar">Precios y Formatos</a> ·
+        <a href="#admin-reportes">Reportes</a> ·
         <a href="#admin-saldos">Saldos</a> ·
         <a href="#admin-periodo">Período</a> ·
         <a href="#admin-actividad">Actividad</a>
@@ -584,6 +588,119 @@
 
     <h4>Activar o desactivar stock</h4>
     <p>El botón <span class="badge green">✓ Stock</span> / <span class="badge red">Sin stock</span> activa o desactiva la disponibilidad del producto en el catálogo para las familias.</p>
+  </div>
+
+  <!-- PRECIOS Y FORMATOS -->
+  <div class="section admin-sec" id="admin-importar">
+    <h3>📥 Precios y Formatos</h3>
+    <p>Esta pestaña hace dos cosas distintas que conviene no mezclar: <strong>ordenar cómo está escrito el formato de venta</strong> de cada producto, y <strong>cargar de una sola vez la lista de precios</strong> que manda un proveedor. Lo primero se hace una vez; lo segundo, cada vez que un proveedor actualiza precios.</p>
+
+    <h4>Primero: qué es el «formato de venta»</h4>
+    <p>En el maestro, la casilla <em>unidad</em> <strong>no</strong> es una unidad de medida: es el <strong>envase que se vende</strong>, y el precio es el precio de ese envase.</p>
+    <ul>
+      <li><strong>"500 gr" a $1.890</strong> significa: <em>la bolsa de medio kilo cuesta $1.890</em>. No que el gramo cueste eso, ni que el kilo cueste eso.</li>
+      <li><strong>"24 rollos" a $8.500</strong> significa: <em>el paquete de 24 rollos cuesta $8.500</em>.</li>
+    </ul>
+    <p>El problema es que lo mismo está escrito de muchas maneras. En tu maestro hay <strong>24 formas distintas de escribir 5 unidades</strong>. Por ejemplo <code>Kg</code>, <code>1 Kg</code> y <code>Kilo</code> son exactamente lo mismo, escrito de tres maneras.</p>
+
+    <h4>Normalizar formatos — qué hace y qué NO hace</h4>
+    <p>El bloque de arriba, <strong>Formatos de venta</strong>, traduce ese texto libre a algo con lo que el sistema pueda calcular.</p>
+    <p><strong>No cambia lo que ves.</strong> "24 rollos" se va a seguir mostrando como "24 rollos" en el catálogo, en el pedido de la familia y en la caja del retiro. Lo que hace es <em>agregar</em>, por detrás, la versión numérica: <em>24 unidades</em>. La etiqueta que lee una persona y el número con que se calcula son dos cosas distintas, y las dos hacen falta.</p>
+    <p><strong>Para qué sirve:</strong></p>
+    <ul>
+      <li>La orden que le llega al proveedor dice <strong>1 kg</strong> en los tres casos, en vez de "Kg", "1 Kg" y "Kilo" como si fueran tres productos distintos. Cuando la etiqueta aporta algo, se conserva entre paréntesis: <em>24 un (24 rollos)</em>.</li>
+      <li>El <strong>Consolidado</strong> puede sumar cuánto <strong>pesa</strong> lo que le compras a cada proveedor — útil para saber si cabe en el auto de alguien y para cotejar contra la guía de despacho.</li>
+      <li>Al importar una lista de precios, el sistema puede emparejar mejor cada línea con su producto.</li>
+    </ul>
+
+    <h4>Cómo se normaliza</h4>
+    <ol class="steps">
+      <li>Haz clic en <strong>Revisar</strong>.</li>
+      <li>Aparecen dos grupos. El primero dice <strong>«se interpretan sin ambigüedad»</strong>: son los que el sistema entiende solo, como "500 gr" o "1 lt". Revisa la lista de reojo y aprieta <strong>Normalizar los N</strong>.</li>
+      <li>El segundo dice <strong>«necesitan que alguien decida»</strong>. Acá hay que mirar uno por uno.</li>
+    </ol>
+    <div class="callout">
+      <strong>Por qué algunos necesitan que decidas tú.</strong> Los que dicen solo <code>Kg</code> o <code>un</code>, sin número, el sistema los asume como <em>1 kilo</em> y <em>1 unidad</em>. Suele estar bien, pero si en realidad esa bolsa es de medio kilo, el precio por kilo quedaría al doble. Y un formato compuesto como <em>"3 bandejas de 500 gr"</em> el sistema no lo adivina a propósito: quedarse con lo primero daría "3 unidades" y perdería el peso, con toda la seguridad del mundo. <strong>Una respuesta segura y equivocada es peor que ninguna, porque nadie la va a ir a revisar.</strong>
+    </div>
+    <p>Para cada uno: escribe la <strong>cantidad</strong>, elige la <strong>unidad</strong> (gr, kg, ml, lt o un) y guarda. Los envases —rollos, cajas, bolsas, paquetes— se cuentan: su unidad es <strong>un</strong>.</p>
+
+    <h4>Importar una lista de precios</h4>
+    <p>El bloque de abajo carga de una vez los precios que mandó un proveedor, en vez de escribirlos uno por uno.</p>
+    <ol class="steps">
+      <li><strong>Elige el proveedor</strong> si la lista es de uno solo. Es opcional, pero ayuda mucho: "Arroz" empareja con cuatro productos en el maestro completo y con uno solo dentro del catálogo de un proveedor.</li>
+      <li>Abre la planilla del proveedor en Excel, <strong>selecciona las celdas</strong> (nombre y precio, y el formato si lo trae) y cópialas con <strong>Ctrl+C</strong>.</li>
+      <li><strong>Pega</strong> en el recuadro grande con <strong>Ctrl+V</strong>. También puedes abrir un archivo CSV con el botón 📄.</li>
+      <li>Aparece la <strong>vista previa</strong>. <em>Todavía no se cambió nada.</em></li>
+      <li>Revisa, resuelve lo que haga falta, y recién ahí aprieta <strong>Aplicar N cambios de precio</strong>.</li>
+    </ol>
+
+    <h4>Cómo leer la vista previa</h4>
+    <p>Cada línea sale con una etiqueta de color:</p>
+    <ul>
+      <li><span class="badge blue">Cambia de precio</span> — encontró el producto y el precio es distinto. <em>Se va a aplicar.</em></li>
+      <li><span class="badge">Cambia — revisar match</span> — el nombre no era idéntico pero se parecía mucho. <strong>Míralo antes de aplicar</strong>: abajo te dice a qué producto lo asoció.</li>
+      <li><span class="badge green">Sin cambios</span> — el precio ya era ése. No se toca.</li>
+      <li><span class="badge">Varios productos posibles</span> — el nombre calza con dos o más. <strong>El sistema no elige por ti</strong>: aparece un buscador para que indiques cuál. Adivinar sería decidir a qué producto le cambias el precio.</li>
+      <li><span class="badge red">No está en el maestro</span> — el proveedor manda algo que no tienes cargado. Puedes asociarlo a mano con el buscador, o dejarlo pasar y crearlo después en Productos.</li>
+      <li><span class="badge">No se pudo leer</span> — falta el nombre, o el precio no se entiende.</li>
+    </ul>
+
+    <div class="callout warn">
+      <strong>El aviso de cambios grandes.</strong> Si algún precio sube o baja más de 3 veces, sale un recuadro amarillo destacándolo. Casi siempre significa que se copió una columna equivocada, no que el proveedor haya subido tanto. La cooperativa sabe si el aceite subió 40%; nadie sabe si subió 4.000%. <strong>Míralos siempre antes de aplicar.</strong>
+    </div>
+
+    <h4>Si te equivocaste</h4>
+    <p>Después de aplicar aparece el botón <strong>↩ Deshacer esta importación</strong>. Devuelve todos los precios a como estaban. Los que alguien haya cambiado a mano <em>después</em> de la importación no se tocan: ese cambio es más nuevo y pisarlo sería borrar una decisión posterior.</p>
+    <div class="callout">
+      <strong>Los pedidos ya sellados no cambian nunca.</strong> Cada pedido guarda adentro el precio que tenía el día que se selló. Cambiar el maestro afecta a los pedidos que se hagan de ahora en adelante, no a los que ya están hechos.
+    </div>
+  </div>
+
+  <!-- FALTANTES Y EXTRAS -->
+  <div class="section admin-sec" id="admin-ajustes">
+    <h3>⚖️ Faltantes y Extras</h3>
+    <p>Acá se registra todo lo que hace que una familia termine pagando algo distinto de lo que pidió. Hay <strong>tres tipos y no son lo mismo</strong>:</p>
+    <ul>
+      <li><strong>📭 No confirmado</strong> — el proveedor avisó <em>antes</em> de la entrega que no lo trae. La familia <strong>nunca</strong> debería pagarlo: se descuenta del pedido.</li>
+      <li><strong>❗ Faltante</strong> — estaba en la lista y no llegó a la caja, o llegó en mal estado. Queda como <strong>saldo a favor</strong>.</li>
+      <li><strong>➕ Extra</strong> — la familia se llevó algo que no había pedido. Queda como <strong>saldo en contra</strong>, y se puede marcar como pagado aparte.</li>
+    </ul>
+
+    <h4>Aplicar lo que avisaron los proveedores</h4>
+    <p>Cuando un proveedor confirma que no trae algo, arriba aparece un recuadro naranjo: <strong>«N faltantes por aplicar»</strong>. Con un clic se descuentan del pedido de cada familia que lo había pedido. <strong>Hazlo antes de marcar los retiros</strong> — si no, se le cobra a la gente algo que nunca llegó. De hecho el sistema no te deja marcar ese retiro hasta que lo apliques, y te ofrece el botón en la misma fila.</p>
+
+    <h4>Entregas parciales</h4>
+    <p>Si el proveedor trae menos de lo pedido, sale un recuadro amarillo aparte y <strong>el sistema no lo reparte solo</strong>. Si tres familias pidieron 5 kilos y llegan 3, quién se queda sin su parte es una decisión de la cooperativa, no una fórmula. Registra los faltantes que correspondan a mano.</p>
+
+    <h4>Registrar uno a mano</h4>
+    <p>Abre la familia y elige <strong>Registrar faltante</strong> o <strong>Registrar extra</strong>. El buscador te muestra —para un faltante— solo lo que esa familia pidió, y cuánto pidió de cada cosa. No te deja marcar más de lo que hay.</p>
+  </div>
+
+  <!-- CONSOLIDADO -->
+  <div class="section admin-sec" id="admin-consolidado">
+    <h3>🧾 Consolidado y órdenes de compra</h3>
+    <p>Agrupa todos los pedidos sellados por proveedor: cuánto hay que comprarle a cada uno, con el desglose de qué familia pidió qué. Si los formatos están normalizados, también muestra el <strong>peso y el volumen</strong> de cada compra.</p>
+    <h4>Enviar la orden</h4>
+    <p>El botón manda un correo al proveedor con un enlace para que confirme producto por producto. <strong>No se puede enviar mientras la ventana de pedidos siga abierta</strong>: si una familia todavía puede agregar algo, el consolidado no es definitivo y le comprarías de menos. Ciérrala en la pestaña Período.</p>
+    <h4>Si el proveedor no usa el enlace</h4>
+    <p>Muchos contestan por teléfono. Desde acá puedes <strong>registrar lo que dijo</strong>, con la misma estructura. Queda escrito que lo anotó la comisión y no el proveedor: una respuesta que hubo que ir a buscar no dice lo mismo del proveedor que una que dio solo, y el indicador de cumplimiento las cuenta aparte.</p>
+  </div>
+
+  <!-- REPORTES -->
+  <div class="section admin-sec" id="admin-reportes">
+    <h3>📗 Reportes</h3>
+    <p>Descarga planillas de Excel de <strong>cualquier período, activo o cerrado</strong>. Elige el período arriba y baja la que necesites, o todas juntas en un archivo.</p>
+    <ul>
+      <li><strong>Consolidado por familia</strong> — qué debe cada una, con los cargos desglosados, más el detalle línea por línea de cada pedido (el que se imprime para armar las cajas).</li>
+      <li><strong>Consolidado por proveedor</strong> — cuánto comprarle a cada uno y qué respondió.</li>
+      <li><strong>Faltantes y extras</strong>.</li>
+      <li><strong>Stock de bodega</strong>, con las mermas.</li>
+      <li><strong>Padrón de familias</strong> — correos, perfiles y saldos. Avisa si dos familias comparten correo.</li>
+    </ul>
+    <p>Cada archivo abre con una hoja de <strong>portada</strong> que dice de qué período es y cuándo se generó, para que dos archivos en la misma carpeta no se confundan.</p>
+    <div class="callout warn">
+      <strong>En un período cerrado, las columnas de saldo muestran el saldo de hoy</strong>, no el que la familia traía entonces: la base guarda un solo saldo por familia y se va actualizando. La cifra que manda ahí es <strong>«Cobrado al cerrar»</strong>, que quedó escrita en el pedido ese día.
+    </div>
   </div>
 
   <!-- SALDOS ADMIN -->
