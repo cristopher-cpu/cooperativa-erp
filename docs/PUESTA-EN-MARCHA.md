@@ -3,7 +3,8 @@
 Guía para dejar el sistema seguro. **No hace falta ser técnico**: son cinco
 pasos, se copian y pegan valores, y cada uno dice cómo comprobar que quedó bien.
 
-Escrito el 18 de septiembre de 2026.
+Escrito el 18 de septiembre de 2026. Actualizado el 19: la migración `006` ya
+está hecha.
 
 > **Regla de oro:** los pasos van en orden y ninguno se salta. El paso 5 es el
 > único que puede dejar a la cooperativa sin poder trabajar, y solo se hace si
@@ -26,8 +27,8 @@ Escrito el 18 de septiembre de 2026.
 Estas cuatro migraciones **solo agregan** columnas y tablas nuevas. No modifican
 ni borran nada de lo que ya existe, así que no pueden romper nada.
 
-Al 18-sep-2026 faltan las cuatro. Mientras falten, el sistema funciona pero
-avisa en pantalla qué no puede hacer todavía.
+Mientras falten, el sistema funciona pero avisa en pantalla qué no puede hacer
+todavía.
 
 ### Cómo se ejecuta un archivo SQL
 
@@ -41,14 +42,28 @@ avisa en pantalla qué no puede hacer todavía.
    bien.** Cada archivo termina con una consulta de verificación que te muestra
    qué quedó configurado.
 
-### En este orden
+### Si te pregunta «¿con RLS o sin RLS?» → **sin RLS**
 
-| Archivo | Qué habilita |
-|---|---|
-| `db/migrations/006_cierre_pedidos_y_confirmacion_asistida.sql` | Cerrar la ventana de pedidos a mano, y registrar por teléfono lo que dijo un proveedor |
-| `db/migrations/007_cargos_multiples_y_exenciones.sql` | Varios cargos fijos con nombre, y eximir familias |
-| `db/migrations/008_formato_de_venta.sql` | Importar listas de precios, y el peso por proveedor |
-| `db/migrations/009_mermas_regalos_sobrantes.sql` | Registrar mermas, regalos y sobrantes de bodega |
+Los archivos `007`, `008` y `009` crean tablas nuevas, y Supabase te va a
+preguntar eso. Elige la opción que **no** activa RLS (*"Run without RLS"*).
+
+RLS es «quién puede ver qué». La migración `010` —el paso 5 de esta guía— es la
+que lo enciende **y además crea las reglas**. Una tabla con RLS encendido y sin
+reglas queda cerrada para todo el mundo, incluido el propio sistema: la pantalla
+de Flujo de Caja te diría «falta ejecutar la migración 007» aunque la hayas
+ejecutado, y te haría buscar un problema que no existe.
+
+No pierdes seguridad al elegir «sin RLS»: hoy todas las tablas están abiertas de
+todos modos, y lo sensible —correos y saldos— está en `families`, no en estas.
+El paso 5 las cierra todas juntas, con sus reglas.
+
+### En este orden
+| Archivo | Qué habilita | Estado |
+|---|---|---|
+| `db/migrations/006_cierre_pedidos_y_confirmacion_asistida.sql` | Cerrar la ventana de pedidos a mano, y registrar por teléfono lo que dijo un proveedor | ✅ hecha |
+| `db/migrations/007_cargos_multiples_y_exenciones.sql` | Varios cargos fijos con nombre, y eximir familias | pendiente |
+| `db/migrations/008_formato_de_venta.sql` | Importar listas de precios, y el peso por proveedor | pendiente |
+| `db/migrations/009_mermas_regalos_sobrantes.sql` | Registrar mermas, regalos y sobrantes de bodega | pendiente |
 
 Los archivos están en la carpeta `db/migrations` del proyecto. Si preferís
 abrirlos desde GitHub: github.com/cristopher-cpu/cooperativa-erp → carpeta `db`
