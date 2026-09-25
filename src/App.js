@@ -374,7 +374,8 @@ function Welcome({ families, onLogin, period, aviso }) {
     <div style={{ padding: '2rem', background: 'linear-gradient(160deg, #f0f7f0 0%, #e6f2e6 55%, #e0f0ea 100%)', minHeight: '100vh' }}>
       <div style={{ textAlign: 'center', marginBottom: '3rem', animation: 'fadeInUp 0.5s ease both' }}>
         <div style={{ fontSize: '48px', marginBottom: '12px' }} className="pulse-emoji">🛒</div>
-        <h1 style={{ fontSize: '28px', marginBottom: '8px', fontWeight: 700, color: '#2d5a2d', letterSpacing: '-0.02em' }}>Cooperativa de Compras</h1>
+        <h1 style={{ fontSize: '28px', marginBottom: '8px', fontWeight: 700, color: '#2d5a2d', letterSpacing: '-0.02em' }}>Cooperativa Quilpueblo</h1>
+        <p style={{ color: '#2e7d32', margin: '0 0 8px', fontSize: '14px', fontWeight: 500 }}>Compramos en Comunidad</p>
         <p style={{ color: '#666', margin: 0, fontSize: '14px' }}>{period?.label} · {period?.month}</p>
       </div>
 
@@ -596,8 +597,8 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '20px' }}>🛒</span>
           <div>
-            <strong style={{ fontSize: '14px', color: '#2d5a2d' }}>Cooperativa</strong>
-            <p style={{ fontSize: '11px', color: '#666', margin: 0 }}>{period?.label}</p>
+            <strong style={{ fontSize: '14px', color: '#2d5a2d' }}>Cooperativa Quilpueblo</strong>
+            <p style={{ fontSize: '10px', color: '#2e7d32', margin: '2px 0 0 0', fontWeight: 500 }}>Compramos en Comunidad</p>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1268,9 +1269,9 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
           <span style={{ fontSize: '20px' }}>🛒</span>
           <div>
             <strong style={{ fontSize: '14px', color: '#1565c0' }}>
-              {esAdmin(user) ? 'Panel Admin — Cooperativa' : 'Panel — Cooperativa Quilpueblo'}
+              Cooperativa Quilpueblo {esAdmin(user) ? '— Panel Admin' : ''}
             </strong>
-            <p style={{ fontSize: '11px', color: '#666', margin: 0 }}>{period?.label}</p>
+            <p style={{ fontSize: '10px', color: '#2e7d32', margin: '2px 0 0 0', fontWeight: 500 }}>Compramos en Comunidad</p>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
