@@ -601,6 +601,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button onClick={() => window.open('/tutorial.html', '_blank')} style={{ padding: '4px 10px', border: '1px solid #c8e6c9', borderRadius: '6px', background: 'white', cursor: 'pointer', fontSize: '11px', color: '#2e7d32', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '4px' }}>📖 Ayuda</button>
           <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#4CAF50', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700 }}>{user.initials}</div>
           <span style={{ fontSize: '12px', fontWeight: 500 }}>{user.name}</span>
           <button onClick={logout} style={{ padding: '4px 10px', border: '1px solid #dde8dd', borderRadius: '6px', background: 'white', cursor: 'pointer', fontSize: '11px', color: '#555' }}>Salir</button>
@@ -1279,6 +1280,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
               {e.ic} {e.corto}
             </span>
           ))}
+          <button onClick={() => window.open('/tutorial.html', '_blank')} style={{ padding: '4px 10px', border: '1px solid #e3f2fd', borderRadius: '6px', background: 'white', cursor: 'pointer', fontSize: '11px', color: '#1565c0', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '4px' }}>📖 Ayuda</button>
           <span style={{ fontSize: '12px' }}>{user.name}</span>
           <button onClick={logout} style={{ padding: '4px 10px', border: '1px solid #dde8dd', borderRadius: '6px', background: 'white', cursor: 'pointer', fontSize: '11px' }}>Salir</button>
         </div>
