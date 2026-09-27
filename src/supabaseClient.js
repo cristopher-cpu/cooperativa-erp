@@ -1108,7 +1108,10 @@ export async function resetDemo() {
   try {
     const response = await fetch('/api/reset-demo', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sesionToken ? { Authorization: 'Bearer ' + sesionToken } : {}),
+      },
     });
     const data = await response.json();
     return { ok: response.ok, data };
