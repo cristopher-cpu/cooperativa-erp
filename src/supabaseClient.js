@@ -1104,6 +1104,19 @@ export async function asignarBodegaConCargo(assignment, saldoAntes) {
   return { asignacion: creada, balance: esperado };
 }
 
+export async function resetDemo() {
+  try {
+    const response = await fetch('/api/reset-demo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await response.json();
+    return { ok: response.ok, data };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
 export async function borrarAsignacionConReverso(asn, saldoAntes) {
   const ok = await deleteBodegaAssignment(asn.id);
   if (!ok) return { error: 'No se pudo eliminar la asignación.' };

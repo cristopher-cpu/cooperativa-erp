@@ -3,7 +3,8 @@ import {
   getFamilies, getProducts, getSealedOrders, getPeriod, getProviders, loginFamily,
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
   getBodega, getBodegaAssignments, asignarBodegaConCargo, borrarAsignacionConReverso, getAdjustments,
-  getPurchaseOrders, getPeriodCharges, getChargeExemptions, getPortada, cerrarSesion, getTokenRechazado
+  getPurchaseOrders, getPeriodCharges, getChargeExemptions, getPortada, cerrarSesion, getTokenRechazado,
+  resetDemo
 } from './supabaseClient';
 import {
   TIPOS, clp, cuentaDeFamilia, parseItems, estadoPedidos, estadoConfirmacionPorProducto,
@@ -1169,6 +1170,8 @@ function SaldoFamilia({ user, ord, cargo, misCargos = [], period, ajustes = [] }
 function AdminApp({ user, families, setFamilies, products, setProducts, providers, setProviders, sealed, setSealed, period, setPeriod, cargos, recargarCargos, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
   const [tab, setTab] = useState('dashboard');
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
+  const [reseteando, setReseteando] = useState(false);
+  const [resetMsg, setResetMsg] = useState('');
 
   // Quién es socia que pide. **Todas**, incluidas las que están en una comisión.
   //
@@ -1206,6 +1209,22 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
       .then(d => setConfigServidor(d))
       .catch(() => { /* sin funciones serverless (npm start): se ignora */ });
   }, []);
+
+  const handleReset = async () => {
+    if (!window.confirm('¿Resetear la demo? Se borrarán todos los pedidos, órdenes y movimientos del período de prueba.')) {
+      return;
+    }
+    setReseteando(true);
+    setResetMsg('');
+    const res = await resetDemo();
+    setReseteando(false);
+    if (res.ok) {
+      setResetMsg('Demo reseteada exitosamente. Recarga la página para ver los cambios.');
+      setTimeout(() => window.location.reload(), 2000);
+    } else {
+      setResetMsg('Error: ' + (res.data?.error || res.error || 'No se pudo resetear'));
+    }
+  };
 
   const todasLasTabs = [
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
@@ -1295,7 +1314,13 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
             {n.l}
           </button>
         ))}
-        <div style={{ marginLeft: 'auto', paddingRight: '0.75rem', flexShrink: 0 }}>
+        <div style={{ marginLeft: 'auto', paddingRight: '0.75rem', flexShrink: 0, display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {esAdmin(user) && (
+            <button onClick={handleReset} disabled={reseteando}
+              style={{ padding: '5px 12px', background: '#ff9800', color: 'white', border: 'none', borderRadius: '6px', cursor: reseteando ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', opacity: reseteando ? 0.7 : 1 }}>
+              {reseteando ? 'Reseteando...' : '🔄 Reset Demo'}
+            </button>
+          )}
           <button onClick={() => setHacerPedidoFam(user)}
             style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap' }}>
             🛒 Mi pedido
@@ -1324,6 +1349,14 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
           <p style={{ fontSize: '12px', color: '#e65100', margin: 0, lineHeight: 1.6, fontWeight: 500 }}>
             🔓 Falta <code>SUPABASE_SERVICE_ROLE_KEY</code> en Vercel. Sin ella, encender RLS dejaría a
             todo el mundo sin poder entrar.
+          </p>
+        </div>
+      )}
+
+      {resetMsg && (
+        <div style={{ background: resetMsg.includes('Error') ? '#ffebee' : '#e8f5e9', borderBottom: `1px solid ${resetMsg.includes('Error') ? '#ef9a9a' : '#81c784'}`, padding: '11px 1rem' }}>
+          <p style={{ fontSize: '12px', color: resetMsg.includes('Error') ? '#c62828' : '#2e7d32', margin: 0, lineHeight: 1.6, fontWeight: 500 }}>
+            {resetMsg}
           </p>
         </div>
       )}
