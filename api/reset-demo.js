@@ -77,8 +77,8 @@ module.exports = async (req, res) => {
     for (const table of tables) {
       try {
         await sb(
-          `/` + table + `?period_id=eq.${encodeURIComponent(periodId)}`,
-          'DELETE'
+          `/${table}?period_id=eq.${encodeURIComponent(periodId)}`,
+          { method: 'DELETE' }
         );
       } catch (e) {
         // Ignorar errores si la tabla no tiene datos o no existe
@@ -88,16 +88,17 @@ module.exports = async (req, res) => {
 
     // Reabrir la ventana de pedidos
     try {
-      await sb(`/periods?id=eq.${encodeURIComponent(periodId)}`, 'PATCH', {
-        orders_closed_at: null,
-      });
+      await sb(
+        `/periods?id=eq.${encodeURIComponent(periodId)}`,
+        { method: 'PATCH', body: { orders_closed_at: null } }
+      );
     } catch (e) {
       console.warn('Warning reopening orders:', e.message);
     }
 
     // Resetear saldos de todas las familias a 0
     try {
-      await sb('/families', 'PATCH', { balance: 0 });
+      await sb('/families', { method: 'PATCH', body: { balance: 0 } });
     } catch (e) {
       console.warn('Warning resetting balances:', e.message);
     }
