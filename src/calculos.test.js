@@ -11,7 +11,7 @@
 import {
   construirCargos, cuentaDeFamilia, puedeMarcarRetiro, pendientesDeConfirmacion,
   resumenBajas, disponibleEnBodega, MOTIVOS_BAJA, montoAjuste, estadoPedidos,
-  ventanaAjustes, puedeBorrarAjuste,
+  ventanaAjustes, puedeBorrarAjuste, precioCongelado, repartirMonto, stockBodegaPorProducto,
 } from './calculos';
 
 // ─── Cargos fijos ────────────────────────────────────────────────────────────
@@ -136,13 +136,14 @@ describe('puedeMarcarRetiro', () => {
     expect(puedeMarcarRetiro({ noTrae: [], parcial: [] }).puede).toBe(true);
   });
 
-  // El caso inequívoco: nadie va a recibir ese producto y el descuento se
-  // aplica con un clic. Dejar marcar el retiro es cobrarle a la familia algo
-  // que nunca existió.
-  it('BLOQUEA cuando el proveedor dijo "no lo trae" y no se aplicó', () => {
+  // Decisión de la cooperativa (27-sep-2026): el retiro no se condiciona a
+  // nada. Lo que el proveedor no trae se descuenta en el mismo clic.
+  it('NO bloquea cuando el proveedor dijo "no lo trae": avisa que se descuenta al marcar', () => {
     const r = puedeMarcarRetiro({ noTrae: [{ product_name: 'Arroz' }], parcial: [] });
-    expect(r.puede).toBe(false);
-    expect(r.motivo).toBe('no_confirmados_sin_aplicar');
+    expect(r.puede).toBe(true);
+    expect(r.advertencia).toBe(true);
+    expect(r.motivo).toBe('descuenta_al_marcar');
+    expect(r.noTrae).toHaveLength(1);
   });
 
   // Repartir quién se queda sin su parte es una decisión de la cooperativa, y
@@ -153,8 +154,11 @@ describe('puedeMarcarRetiro', () => {
     expect(r.advertencia).toBe(true);
   });
 
-  it('si hay de los dos, manda el bloqueo', () => {
-    expect(puedeMarcarRetiro({ noTrae: [{}], parcial: [{}] }).puede).toBe(false);
+  it('con los dos casos a la vez, igual deja pasar y dice ambos', () => {
+    const r = puedeMarcarRetiro({ noTrae: [{}], parcial: [{}] });
+    expect(r.puede).toBe(true);
+    expect(r.noTrae).toHaveLength(1);
+    expect(r.parcial).toHaveLength(1);
   });
 });
 
@@ -206,6 +210,96 @@ describe('pendientesDeConfirmacion', () => {
       ordenes: [{ ...ordenes[0], status: 'enviada' }], sealedOrders, period, ajustes: [],
     });
     expect(p.pendientes).toHaveLength(0);
+  });
+
+  // Si el maestro cambió de precio entre el sellado y la confirmación, se
+  // devuelve lo que la familia PAGÓ, no el precio nuevo.
+  it('el descuento usa el precio congelado en el pedido de cada familia', () => {
+    const conPrecio = [
+      { id: 'o1', family_id: 'f1', items: JSON.stringify([{ id: 1, qty: 2, p: 1800 }]) },
+      { id: 'o2', family_id: 'f2', items: JSON.stringify([{ id: 1, qty: 1, p: 1900 }]) },
+    ];
+    const p = pendientesDeConfirmacion({ ordenes, sealedOrders: conPrecio, period, ajustes: [] });
+    const porFam = Object.fromEntries(p.pendientes.map(x => [x.family_id, x]));
+    expect(porFam.f1.amount).toBe(-3600);
+    expect(porFam.f2.amount).toBe(-1900);
+  });
+
+  // El proveedor dijo "no lo tengo", se descontó, y después la respuesta
+  // cambió. Sin esto la familia recibe el producto y además se le descuenta.
+  it('detecta descuentos que quedaron obsoletos porque la respuesta cambió', () => {
+    const ahoraSiTrae = [{
+      status: 'confirmada', provider_name: 'El Granero', sent_at: '2026-10-01T10:00:00Z',
+      lines: [{ product_id: 1, name: 'Arroz', qty: 5, available: true, confirmed_qty: 5, price: 2000 }],
+    }];
+    const ajustes = [
+      { id: 'a1', type: 'no_confirmado', source: 'proveedor', family_id: 'f1', product_id: 1, amount: -4000 },
+      { id: 'a2', type: 'faltante', source: 'comision', family_id: 'f1', product_id: 1, amount: -2000 },
+    ];
+    const p = pendientesDeConfirmacion({ ordenes: ahoraSiTrae, sealedOrders, period, ajustes });
+    expect(p.obsoletos.map(a => a.id)).toEqual(['a1']);
+  });
+
+  it('mientras la orden reenviada espera respuesta, el descuento no se da por obsoleto', () => {
+    const esperando = [{ status: 'enviada', sent_at: '2026-10-01T10:00:00Z', lines: [{ product_id: 1, qty: 5 }] }];
+    const ajustes = [{ id: 'a1', type: 'no_confirmado', source: 'proveedor', family_id: 'f1', product_id: 1, amount: -4000 }];
+    const p = pendientesDeConfirmacion({ ordenes: esperando, sealedOrders, period: { id: 'P1' }, ajustes });
+    expect(p.obsoletos).toHaveLength(0);
+  });
+});
+
+// ─── Precio congelado y reparto de un producto ──────────────────────────────
+
+describe('precioCongelado', () => {
+  const ord = { items: JSON.stringify([{ id: 7, p: 2500, qty: 1 }]) };
+  it('devuelve el precio al que se compró', () => {
+    expect(precioCongelado(ord, 7)).toBe(2500);
+    expect(precioCongelado(ord, '7')).toBe(2500);
+  });
+  it('null si no está en el pedido', () => {
+    expect(precioCongelado(ord, 8)).toBeNull();
+    expect(precioCongelado(null, 7)).toBeNull();
+  });
+});
+
+describe('repartirMonto: el zapallo en pedazos', () => {
+  it('los pedazos suman EXACTO el total', () => {
+    const r = repartirMonto(2000, [1, 1, 1]);
+    expect(r.reduce((s, x) => s + x, 0)).toBe(2000);
+    expect(r.sort()).toEqual([666, 667, 667]);
+  });
+  it('reparte en proporción al peso', () => {
+    expect(repartirMonto(3000, [1.5, 0.5, 1])).toEqual([1500, 500, 1000]);
+  });
+  it('acepta pesos en kilos con decimales y sigue cuadrando', () => {
+    const r = repartirMonto(4590, [1.2, 0.85, 0.7]);
+    expect(r.reduce((s, x) => s + x, 0)).toBe(4590);
+  });
+  it('pesos inválidos no rompen: dan cero', () => {
+    expect(repartirMonto(1000, [0, 0])).toEqual([0, 0]);
+    expect(repartirMonto(1000, [])).toEqual([]);
+  });
+});
+
+describe('stockBodegaPorProducto', () => {
+  const productos = [{ id: 1, name: 'Zapallo Camote' }, { id: 2, name: 'Papas' }];
+  it('empareja por product_id y, en ítems viejos, por nombre sin tildes', () => {
+    const m = stockBodegaPorProducto({
+      productos,
+      items: [
+        { id: 'b1', product_id: 2, product_name: 'Papas', quantity: 5, unit: 'kg' },
+        { id: 'b2', product_name: 'zapallo camóte', quantity: 1, unit: 'un' },
+      ],
+      asignaciones: [{ bodega_id: 'b1', quantity: 2 }],
+    });
+    expect(m.get(2).disponible).toBe(3);
+    expect(m.get(1).disponible).toBe(1);
+  });
+  it('lo que ya no queda no se anuncia', () => {
+    const m = stockBodegaPorProducto({
+      productos, items: [{ id: 'b1', product_id: 2, quantity: 2 }], asignaciones: [{ bodega_id: 'b1', quantity: 2 }],
+    });
+    expect(m.has(2)).toBe(false);
   });
 });
 

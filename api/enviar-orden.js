@@ -208,7 +208,14 @@ module.exports = async (req, res) => {
     // La orden queda guardada aunque el correo falle: así el admin puede
     // reintentar el envío sin rearmar nada, y queda registro del error.
     await updateOrder(orden.id, envio.ok
-      ? { sent_at: new Date().toISOString(), sent_to: envio.destinatario, is_test: !!envio.esPrueba, send_error: null }
+      ? {
+          sent_at: new Date().toISOString(),
+          // Sin correo del proveedor la orden igual queda «enviada»: el enlace
+          // se le hace llegar por WhatsApp desde la copia o desde el panel.
+          sent_to: envio.sinCorreo ? 'WhatsApp (sin correo) · copia a ' + envio.copiaA : envio.destinatario,
+          is_test: !!envio.esPrueba,
+          send_error: null,
+        }
       : { send_error: envio.error });
 
     if (!envio.ok) {
@@ -222,6 +229,9 @@ module.exports = async (req, res) => {
       lineas: lineas.length,
       enviadoA: envio.destinatario,
       esPrueba: !!envio.esPrueba,
+      sinCorreo: !!envio.sinCorreo,
+      copiaA: envio.copiaA || null,
+      copiaError: envio.copiaError || null,
       link,
     });
   } catch (e) {

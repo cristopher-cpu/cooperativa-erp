@@ -118,6 +118,39 @@ export function cuentaDeFamilia({ ord, ajustes = [], cargo = 0, saldo = 0 }) {
   };
 }
 
+// El precio al que la familia COMPRÓ un producto: el que quedó congelado en su
+// pedido al sellar. Un faltante devuelve lo que se cobró, no lo que el producto
+// vale hoy — si el maestro subió $300 entre el sellado y el retiro, devolver al
+// precio nuevo le regalaría $300 a la familia, y al revés se los quitaría.
+// Devuelve null si el producto no está en el pedido.
+export function precioCongelado(ord, productId) {
+  const it = parseItems(ord).find(i => String(i.id) === String(productId));
+  if (!it) return null;
+  const p = Number(it.p);
+  return Number.isFinite(p) ? p : null;
+}
+
+// Parte un monto entero en pedazos proporcionales a `pesos`, y garantiza que
+// los pedazos sumen EXACTAMENTE el total. Sirve para el zapallo que se reparten
+// tres familias: $2.000 en tres no son tres de $666,67 — son $667 + $667 + $666,
+// y el peso que sobra por redondeo va a quien le tocaba la fracción más grande
+// (método del resto mayor). Sin eso la cooperativa cobra $1.999 o $2.001.
+export function repartirMonto(total, pesos) {
+  const t = Math.round(Number(total) || 0);
+  const ps = (pesos || []).map(p => Math.max(0, Number(p) || 0));
+  const suma = ps.reduce((s, p) => s + p, 0);
+  if (!ps.length || suma <= 0) return ps.map(() => 0);
+
+  const exactos = ps.map(p => (t * p) / suma);
+  const partes = exactos.map(x => Math.floor(x));
+  let resto = t - partes.reduce((s, x) => s + x, 0);
+  exactos
+    .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i)
+    .forEach(({ i }) => { if (resto > 0) { partes[i]++; resto--; } });
+  return partes;
+}
+
 // Agrupa los ajustes por familia, para no filtrar el array entero en cada fila.
 export function ajustesPorFamilia(ajustes) {
   const m = new Map();
@@ -148,7 +181,9 @@ export function derivarDeConfirmacion({ orden, sealedOrders, period, productos =
     parseItems(ord).forEach(item => {
       if (!item || !(Number(item.qty) > 0)) return;
       if (!porProducto.has(item.id)) porProducto.set(item.id, []);
-      porProducto.get(item.id).push({ ord, qty: Number(item.qty) });
+      // El precio de cada familia es el que quedó congelado en SU pedido: es lo
+      // que se le cobró, y por lo tanto lo que hay que descontarle.
+      porProducto.get(item.id).push({ ord, qty: Number(item.qty), precio: Number(item.p) });
     });
   });
 
@@ -157,12 +192,13 @@ export function derivarDeConfirmacion({ orden, sealedOrders, period, productos =
     if (pedidoPor.length === 0) return;
 
     const prod = productos.find(p => p.id === l.product_id);
-    const precio = Number(l.price) || (prod ? Number(prod.price) : 0) || 0;
-    const nada = l.available === false || l.confirmed_qty === 0;
-    const parcial = !nada && l.confirmed_qty != null && l.confirmed_qty < l.qty;
+    const precioOrden = Number(l.price) || (prod ? Number(prod.price) : 0) || 0;
+    const nada = l.available === false || (l.confirmed_qty != null && Number(l.confirmed_qty) === 0);
+    const parcial = !nada && l.confirmed_qty != null && Number(l.confirmed_qty) < Number(l.qty);
 
     if (nada) {
-      pedidoPor.forEach(({ ord, qty }) => {
+      pedidoPor.forEach(({ ord, qty, precio: precioFam }) => {
+        const precio = Number.isFinite(precioFam) && precioFam > 0 ? precioFam : precioOrden;
         automaticos.push({
           period_id: period.id,
           family_id: ord.family_id,
@@ -183,12 +219,15 @@ export function derivarDeConfirmacion({ orden, sealedOrders, period, productos =
         product_id: l.product_id,
         product_name: l.name,
         unit: l.unit || '',
-        precio,
+        precio: precioOrden,
         pedido: l.qty,
         llegan: l.confirmed_qty,
         faltan: l.qty - l.confirmed_qty,
         proveedor: orden.provider_name,
-        familias: pedidoPor.map(({ ord, qty }) => ({ family_id: ord.family_id, sealed_order_id: ord.id, qty })),
+        familias: pedidoPor.map(({ ord, qty, precio: precioFam }) => ({
+          family_id: ord.family_id, sealed_order_id: ord.id, qty,
+          precio: Number.isFinite(precioFam) && precioFam > 0 ? precioFam : precioOrden,
+        })),
       });
     }
   });
@@ -458,7 +497,7 @@ export function estadoConfirmacionPorProducto(purchaseOrders = [], period = null
         if (l.product_id == null) return;
         let estado;
         if (!confirmada) estado = vencido ? 'asumido_completo' : 'esperando';
-        else if (l.available === false || Number(l.confirmed_qty) === 0) estado = 'no_disponible';
+        else if (l.available === false || (l.confirmed_qty != null && Number(l.confirmed_qty) === 0)) estado = 'no_disponible';
         else if (l.confirmed_qty != null && Number(l.confirmed_qty) < Number(l.qty)) estado = 'parcial';
         else estado = 'completo';
 
@@ -574,7 +613,7 @@ export function construirCargos({ charges = null, exemptions = [], period = null
 // no traía es cobrarle a la familia un producto que nunca existió. Cuando el
 // cálculo vivía dentro de un componente, la otra pantalla no podía verlo.
 export function pendientesDeConfirmacion({ ordenes = [], sealedOrders = [], period = null, productos = [], ajustes = [] }) {
-  if (!period) return { pendientes: [], aRepartir: [], porFamilia: new Map() };
+  if (!period) return { pendientes: [], aRepartir: [], obsoletos: [], porFamilia: new Map() };
 
   const automaticos = [];
   const reparto = [];
@@ -590,7 +629,26 @@ export function pendientesDeConfirmacion({ ordenes = [], sealedOrders = [], peri
   const yaHay = new Set(
     ajustes.filter(a => a.type === 'no_confirmado').map(a => a.family_id + '|' + a.product_id)
   );
-  const pendientes = automaticos.filter(a => !yaHay.has(a.family_id + '|' + a.product_id));
+  // Solo manda la respuesta MÁS RECIENTE de cada producto. Si quedó una orden
+  // vieja que decía «no lo trae» y la nueva dice que sí, proponer el descuento
+  // (y aplicarlo solo al marcar el retiro) sería contradecir a la de abajo.
+  const estados = estadoConfirmacionPorProducto(ordenes, period);
+  const vigente = (pid) => { const e = estados.get(pid); return !e || e.estado === 'no_disponible'; };
+  const pendientes = automaticos.filter(a => !yaHay.has(a.family_id + '|' + a.product_id) && vigente(a.product_id));
+
+  // Y al revés: descuentos que se aplicaron porque el proveedor dijo «no lo
+  // tengo», y después esa respuesta cambió —la comisión la corrigió, o se
+  // reenvió la orden y ahora sí lo trae—. Si nadie los quita, la familia recibe
+  // el producto y además se le descuenta: saldo a favor inventado.
+  //
+  // Solo cuentan los que puso el sistema (`source = 'proveedor'`) y solo contra
+  // una respuesta NUEVA ya dada (completo o parcial). Mientras la orden
+  // reenviada espera respuesta, el descuento se queda: todavía no se sabe.
+  const obsoletos = ajustes.filter(a => {
+    if (a.type !== 'no_confirmado' || a.source !== 'proveedor') return false;
+    const e = estados.get(a.product_id);
+    return !!e && (e.estado === 'completo' || e.estado === 'parcial');
+  });
 
   // Indexado por familia: es como lo lee Retiros, familia por familia en la
   // puerta de la bodega.
@@ -602,42 +660,67 @@ export function pendientesDeConfirmacion({ ordenes = [], sealedOrders = [], peri
   pendientes.forEach(p => anota(p.family_id, 'noTrae', p));
   reparto.forEach(r => r.familias.forEach(f => anota(f.family_id, 'parcial', { ...r, suQty: f.qty })));
 
-  return { pendientes, aRepartir: reparto, porFamilia };
+  return { pendientes, aRepartir: reparto, obsoletos, porFamilia };
 }
 
 // ¿Se puede marcar el retiro de esta familia?
 //
-// Bloquea solo el caso inequívoco: el proveedor dijo que NO LO TRAE, nadie lo
-// va a recibir, y el descuento se aplica con un clic desde la misma fila. No
-// hay decisión que tomar, solo un paso que se saltó.
+// SIEMPRE. Decidido por la cooperativa el 27-sep-2026: el retiro no se
+// condiciona a nada —ni a haber pagado, ni a que la comisión haya pasado antes
+// por Faltantes y Extras—. Es lo esencial de una cooperativa: la caja se
+// entrega, y las cuentas se arreglan después en el saldo.
 //
-// Una entrega PARCIAL no bloquea, aunque también esté sin resolver: quién se
-// queda sin su parte lo decide la cooperativa, y esa conversación no puede
-// ocurrir con la fila de familias esperando en la puerta. Se advierte y se
-// deja pasar — el retiro es un hecho físico, y negarlo en la pantalla no
-// impide que la caja se entregue.
+// Lo que antes bloqueaba (el proveedor avisó que NO LO TRAE y el descuento no
+// se aplicó) ahora se resuelve solo: al marcar el retiro, la pantalla aplica
+// esos descuentos en el mismo clic. La familia nunca paga lo que no llegó, y la
+// fila de la puerta no espera.
+//
+// Una entrega PARCIAL se advierte: quién se queda sin su parte lo decide la
+// cooperativa, y se registra en Faltantes y Extras cuando se resuelva.
 export function puedeMarcarRetiro(pendientesFam) {
-  const p = pendientesFam || { noTrae: [], parcial: [] };
-  if (p.noTrae.length > 0) {
-    return {
-      puede: false,
-      motivo: 'no_confirmados_sin_aplicar',
-      noTrae: p.noTrae,
-      parcial: p.parcial,
-      texto: p.noTrae.length === 1
-        ? 'El proveedor avisó que no trae 1 producto de este pedido y el descuento todavía no se aplicó.'
-        : 'El proveedor avisó que no trae ' + p.noTrae.length + ' productos de este pedido y los descuentos todavía no se aplicaron.',
-    };
+  const p = pendientesFam || {};
+  const noTrae = p.noTrae || [];
+  const parcial = p.parcial || [];
+  const textos = [];
+  if (noTrae.length) {
+    textos.push(noTrae.length === 1
+      ? 'El proveedor avisó que no trae 1 producto de este pedido: se descuenta solo al marcar el retiro.'
+      : 'El proveedor avisó que no trae ' + noTrae.length + ' productos de este pedido: se descuentan solos al marcar el retiro.');
   }
-  if (p.parcial.length > 0) {
-    return {
-      puede: true, advertencia: true, motivo: 'parciales_sin_repartir',
-      noTrae: [], parcial: p.parcial,
-      texto: 'Hay ' + p.parcial.length + ' producto' + (p.parcial.length === 1 ? '' : 's') +
-        ' del que el proveedor trae solo una parte. Repartir el faltante es decisión de la cooperativa: regístralo en Faltantes y Extras cuando se resuelva.',
-    };
+  if (parcial.length) {
+    textos.push('Hay ' + parcial.length + ' producto' + (parcial.length === 1 ? '' : 's') +
+      ' del que el proveedor trae solo una parte. Repartir el faltante es decisión de la cooperativa: regístralo en Faltantes y Extras cuando se resuelva.');
   }
-  return { puede: true, advertencia: false, motivo: 'ok', noTrae: [], parcial: [] };
+  return {
+    puede: true,
+    advertencia: textos.length > 0,
+    motivo: noTrae.length ? 'descuenta_al_marcar' : parcial.length ? 'parciales_sin_repartir' : 'ok',
+    noTrae, parcial,
+    texto: textos.join(' '),
+  };
+}
+
+// ── Stock de bodega visto desde un producto del maestro ─────────────────────
+//
+// Para que cualquier buscador de productos pueda decir «esto también está en
+// bodega, quedan 3». Empareja por `product_id` cuando el ítem lo tiene (desde
+// la migración 013) y, si no, por nombre sin tildes ni mayúsculas: los ítems
+// viejos solo guardaban el nombre.
+export function stockBodegaPorProducto({ items = [], asignaciones = [], bajas = [], productos = [] } = {}) {
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const porNombre = new Map(productos.map(p => [norm(p.name), p.id]));
+  const mapa = new Map();
+  items.forEach(item => {
+    const pid = item.product_id != null ? item.product_id : porNombre.get(norm(item.product_name));
+    if (pid == null) return;
+    const disponible = disponibleEnBodega({ item, asignaciones, bajas });
+    const prev = mapa.get(pid) || { disponible: 0, unit: item.unit, precio: Number(item.price) || 0, items: [] };
+    prev.disponible += disponible;
+    prev.items.push(item);
+    mapa.set(pid, prev);
+  });
+  mapa.forEach((v, k) => { if (!(v.disponible > 0)) mapa.delete(k); });
+  return mapa;
 }
 
 // ── Bajas de bodega: mermas, regalos y sobrantes ────────────────────────────

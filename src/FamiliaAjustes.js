@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { addAdjustment, deleteAdjustment } from './supabaseClient';
-import { TIPOS, clp, parseItems, montoAjuste, ventanaAjustes, puedeBorrarAjuste } from './calculos';
+import { TIPOS, clp, parseItems, montoAjuste, ventanaAjustes, puedeBorrarAjuste, precioCongelado } from './calculos';
 
 // ─── FALTANTES Y EXTRAS DE LA FAMILIA ────────────────────────────────────────
 // Del paso 07 del flujo: "cada familia o socio/a registra sus productos
@@ -45,6 +45,8 @@ export function FamiliaAjustes({ user, ord, period, products, ajustes, setAjuste
       }
     }
 
+    // Lo que faltó se devuelve al precio al que se compró, no al de hoy.
+    const precio = form.type === 'extra' ? prod.price : (precioCongelado(ord, prod.id) ?? prod.price);
     setGuardando(true);
     const res = await addAdjustment({
       period_id: period.id,
@@ -55,8 +57,8 @@ export function FamiliaAjustes({ user, ord, period, products, ajustes, setAjuste
       product_name: prod.name,
       unit: prod.unit,
       qty,
-      unit_price: prod.price,
-      amount: montoAjuste(form.type, qty, prod.price),
+      unit_price: precio,
+      amount: montoAjuste(form.type, qty, precio),
       source: 'familia',
       note: form.note.trim() || null,
       created_by: user.id,
@@ -157,7 +159,8 @@ export function FamiliaAjustes({ user, ord, period, products, ajustes, setAjuste
               const prod = products.find(p => String(p.id) === String(form.productId));
               const q = parseFloat(form.qty);
               if (!prod || isNaN(q) || q <= 0) return null;
-              const m = montoAjuste(form.type, q, prod.price);
+              const precio = form.type === 'extra' ? prod.price : (precioCongelado(ord, prod.id) ?? prod.price);
+              const m = montoAjuste(form.type, q, precio);
               return (
                 <div style={{ padding: '8px 11px', background: TIPOS[form.type].bg, borderRadius: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: '11px', color: '#555' }}>{m < 0 ? 'Se te descontará' : 'Se te sumará'}</span>

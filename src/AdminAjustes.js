@@ -5,15 +5,17 @@ import {
 } from './supabaseClient';
 import {
   TIPOS, clp, parseItems, montoAjuste, cuentaDeFamilia, ajustesPorFamilia, pendientesDeConfirmacion,
+  precioCongelado,
 } from './calculos';
 import { BuscadorProducto } from './Buscador';
+import { RepartirProducto } from './RepartirProducto';
 
 // ─── FALTANTES Y EXTRAS ──────────────────────────────────────────────────────
 // Lo que el proveedor no trae y lo que la familia se lleva de más. Es la pieza
 // que conecta la confirmación del proveedor con lo que termina pagando cada
 // familia: hasta ahora esa confirmación se registraba y no movía nada.
 
-export function AdminAjustes({ families, sealed, products, period, cargos }) {
+export function AdminAjustes({ families, sealed, products, period, cargos, currentAdmin, enBodega = null }) {
   const [ajustes, setAjustes] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -43,7 +45,7 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
   // y qué quedó ambiguo y necesita que alguien decida. El cálculo vive en
   // `calculos.js` porque Retiros lee exactamente lo mismo para decidir si deja
   // marcar la entrega.
-  const { pendientes, aRepartir } = useMemo(
+  const { pendientes, aRepartir, obsoletos } = useMemo(
     () => pendientesDeConfirmacion({ ordenes, sealedOrders: sealedList, period, productos: products, ajustes }),
     [ordenes, sealedList, period, products, ajustes]
   );
@@ -61,6 +63,30 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
       setMsg({ tipo: 'ok', texto: 'Se aplicaron ' + n + ' faltante' + (n === 1 ? '' : 's') + ' desde lo que confirmaron los proveedores.' });
     }
     setAplicando(false);
+  };
+
+  // Quitar los descuentos que ya no corresponden porque el proveedor cambió su
+  // respuesta (ver `obsoletos` en pendientesDeConfirmacion).
+  const [quitando, setQuitando] = useState(false);
+  const quitarObsoletos = async () => {
+    if (!obsoletos.length) return;
+    if (!window.confirm(
+      'Se quitan ' + obsoletos.length + ' descuento' + (obsoletos.length === 1 ? '' : 's') +
+      ' que se habían aplicado porque el proveedor dijo que no traía el producto. Su respuesta cambió: ahora sí lo trae.\n\n' +
+      'A esas familias se les vuelve a cobrar el producto. ¿Continuar?'
+    )) return;
+    setQuitando(true); setMsg(null);
+    const errores = [];
+    for (const a of obsoletos) {
+      const r = await deleteAdjustment(a.id);
+      if (r && r.error) errores.push(a.product_name + ': ' + r.error);
+    }
+    const frescos = await getAdjustments(period.id);
+    setAjustes(frescos || []);
+    setMsg(errores.length
+      ? { tipo: 'err', texto: 'No se pudieron quitar todos: ' + errores.join(' · ') }
+      : { tipo: 'ok', texto: 'Se quitaron ' + obsoletos.length + ' descuento' + (obsoletos.length === 1 ? '' : 's') + ' que ya no correspondían.' });
+    setQuitando(false);
   };
 
   const abrirForm = (familyId, type) => {
@@ -99,6 +125,9 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
 
     setGuardando(true);
     const ord = sealed[form.familyId];
+    // Un faltante se devuelve al precio al que se COMPRÓ (el congelado en el
+    // pedido), no al del maestro de hoy. Un extra se cobra al precio de hoy.
+    const precio = form.type === 'extra' ? prod.price : (precioCongelado(ord, prod.id) ?? prod.price);
     const res = await addAdjustment({
       period_id: period.id,
       family_id: form.familyId,
@@ -108,8 +137,8 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
       product_name: prod.name,
       unit: prod.unit,
       qty,
-      unit_price: prod.price,
-      amount: montoAjuste(form.type, qty, prod.price),
+      unit_price: precio,
+      amount: montoAjuste(form.type, qty, precio),
       source: 'comision',
       note: form.note.trim() || null,
     });
@@ -153,7 +182,9 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
     );
   }
 
-  const conPedido = families.filter(f => sealed[f.id]);
+  // Con pedido, o sin pedido pero con algo registrado (por ejemplo una parte de
+  // un producto repartido): si no aparece acá, nadie ve ese cobro.
+  const conPedido = families.filter(f => sealed[f.id] || porFamilia.has(f.id));
   const totalNoConf = ajustes.filter(a => a.type === 'no_confirmado').reduce((s, a) => s + a.amount, 0);
   const totalFalt = ajustes.filter(a => a.type === 'faltante').reduce((s, a) => s + a.amount, 0);
   const totalExtra = ajustes.filter(a => a.type === 'extra' && !a.paid).reduce((s, a) => s + a.amount, 0);
@@ -238,6 +269,42 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
         </div>
       )}
 
+      {/* Descuentos que quedaron sin fundamento: el proveedor había dicho «no lo
+          tengo», se descontó, y después su respuesta cambió. */}
+      {obsoletos.length > 0 && (
+        <div style={{ background: 'white', border: '2px solid #ef9a9a', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#c62828', margin: '0 0 5px' }}>
+            ↩ {obsoletos.length} descuento{obsoletos.length === 1 ? '' : 's'} que ya no corresponde{obsoletos.length === 1 ? '' : 'n'}
+          </p>
+          <p style={{ fontSize: '12px', color: '#666', margin: '0 0 10px', lineHeight: 1.5 }}>
+            Se descontaron porque el proveedor dijo que no traía el producto, pero su respuesta cambió y ahora sí lo trae.
+            Si no se quitan, la familia recibe el producto y además se le descuenta.
+          </p>
+          {obsoletos.slice(0, 12).map(a => {
+            const fam = families.find(f => f.id === a.family_id);
+            return (
+              <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px', borderBottom: '1px solid #f5f5f5' }}>
+                <span style={{ color: '#444' }}>{(fam && fam.name) || a.family_id} · {a.product_name} <span style={{ color: '#aaa' }}>×{a.qty}</span></span>
+                <span style={{ fontWeight: 600, color: '#c62828', whiteSpace: 'nowrap' }}>{clp(a.amount)}</span>
+              </div>
+            );
+          })}
+          <button onClick={quitarObsoletos} disabled={quitando}
+            style={{ width: '100%', marginTop: '10px', padding: '10px', background: '#c62828', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
+            {quitando ? 'Quitando...' : 'Quitar ' + (obsoletos.length === 1 ? 'el descuento' : 'los ' + obsoletos.length + ' descuentos')}
+          </button>
+        </div>
+      )}
+
+      {/* El zapallo entero que se llevan en pedazos varias familias. */}
+      <RepartirProducto families={families} sealed={sealed} products={products} period={period}
+        ajustes={ajustes} enBodega={enBodega} currentAdmin={currentAdmin}
+        onGuardado={async (texto) => {
+          const frescos = await getAdjustments(period.id);
+          setAjustes(frescos || []);
+          setMsg({ tipo: 'ok', texto });
+        }} />
+
       {/* Entregas parciales: el sistema no decide quién se queda sin su parte */}
       {aRepartir.length > 0 && (
         <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
@@ -313,7 +380,7 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
                     { l: '📭 No confirmados', v: cuenta.noConfirmados, mostrar: cuenta.noConfirmados !== 0 },
                     { l: '❗ Faltantes', v: cuenta.faltantes, mostrar: cuenta.faltantes !== 0 },
                     { l: '➕ Extras', v: cuenta.extras, mostrar: cuenta.extras !== 0 },
-                    { l: 'Saldo anterior', v: -cuenta.saldoAnterior, mostrar: cuenta.saldoAnterior !== 0 },
+                    { l: 'Saldo actual (incluye pagos)', v: -cuenta.saldoAnterior, mostrar: cuenta.saldoAnterior !== 0 },
                   ].filter(r => r.mostrar).map(r => (
                     <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px', borderBottom: '1px solid #f0f7f0' }}>
                       <span style={{ color: '#555' }}>{r.l}</span>
@@ -374,8 +441,9 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
                         value={form.productId}
                         onChange={prod => { setForm(p => ({ ...p, productId: prod ? prod.id : '' })); setFormErr(''); }}
                         autoFocus
+                        enBodega={form.type === 'extra' ? enBodega : null}
                         placeholder={form.type === 'extra'
-                          ? 'Escribe para buscar en todo el maestro...'
+                          ? 'Busca por producto, proveedor o categoría...'
                           : 'Escribe para buscar en lo que pidió...'}
                         vacio={form.type === 'extra'
                           ? 'No hay productos cargados en el maestro'
@@ -404,7 +472,8 @@ export function AdminAjustes({ families, sealed, products, period, cargos }) {
                       const prod = products.find(p => String(p.id) === String(form.productId));
                       const q = parseFloat(form.qty);
                       if (!prod || isNaN(q) || q <= 0) return null;
-                      const m = montoAjuste(form.type, q, prod.price);
+                      const precio = form.type === 'extra' ? prod.price : (precioCongelado(sealed[f.id], prod.id) ?? prod.price);
+                      const m = montoAjuste(form.type, q, precio);
                       return (
                         <div style={{ padding: '7px 10px', background: TIPOS[form.type].bg, borderRadius: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
                           <span style={{ fontSize: '11px', color: '#555' }}>{m < 0 ? 'Se le descontará' : 'Se le cobrará'}</span>

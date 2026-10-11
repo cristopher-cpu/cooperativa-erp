@@ -4,12 +4,13 @@ import {
   sealOrder, unsealOrder, markRetired, updateFamilyBalance,
   getBodega, getBodegaAssignments, asignarBodegaConCargo, borrarAsignacionConReverso, getAdjustments,
   getPurchaseOrders, getPeriodCharges, getChargeExemptions, getPortada, cerrarSesion, getTokenRechazado,
-  resetDemo
+  getDraft, saveDraft, deleteDraft, sellarBorradores, getBajas, addAdminLog,
 } from './supabaseClient';
 import {
   TIPOS, clp, cuentaDeFamilia, parseItems, estadoPedidos, estadoConfirmacionPorProducto,
-  ESTADOS_CONFIRMACION, construirCargos,
+  ESTADOS_CONFIRMACION, construirCargos, disponibleEnBodega, stockBodegaPorProducto,
 } from './calculos';
+import { coincide, textoDeProducto, BadgeBodega } from './Buscador';
 import './App.css';
 import { AdminFamilias, AdminProductos, AdminPeriodo, AdminPedidos, AdminRetiros, AdminDashboard, AdminFlujoCaja, AdminBodega, AdminLogs, AdminAnalytics } from './AdminComponents';
 import { AdminProveedores } from './AdminProveedores';
@@ -96,19 +97,39 @@ function App() {
   //
   // Espera a que haya sesión: sin ella, con RLS encendido, esto solo gasta una
   // consulta que la base va a rechazar.
+  const recargarPedidos = useCallback(async () => {
+    if (!period?.id) return;
+    const orders = await getSealedOrders(period.id);
+    const map = {};
+    orders.forEach(o => { map[o.family_id] = o; });
+    setSealed(map);
+  }, [period?.id]);
+
   useEffect(() => {
     if (!period?.id || !user) { setSealed({}); return; }
     let cancelled = false;
-    getSealedOrders(period.id).then(orders => {
+    (async () => {
+      // Si la ventana de pedidos ya cerró, lo que quedó en los carritos se
+      // sella antes de mostrar nada (migración 013). El cron diario lo hace
+      // igual pasada la medianoche; esto cubre a quien entre antes que el cron,
+      // y a un cierre manual hecho desde otro computador. Si los pedidos siguen
+      // abiertos, la base no hace nada.
+      if (estadoPedidos(period).cerrados) await sellarBorradores(period.id);
+      const orders = await getSealedOrders(period.id);
       if (cancelled) return;
       const map = {};
       orders.forEach(o => { map[o.family_id] = o; });
       setSealed(map);
-      setCarts({});
-    });
+    })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period?.id, user?.id]);
+  }, [period?.id, period?.orders_closed_at, user?.id]);
+
+  // Los carritos en pantalla son del período: al cambiar de período se vacían.
+  // Va aparte y sin esperar nada a propósito: si se vaciaran después de la
+  // consulta de arriba, podrían borrar el carrito guardado que la vista de la
+  // familia acaba de recuperar.
+  useEffect(() => { setCarts({}); }, [period?.id]);
 
   const login = u => setUser(u);
 
@@ -142,8 +163,14 @@ function App() {
     [charges, exemptions, period]
   );
 
+  // Devuelve true si quedó sellado. Antes no se miraba la respuesta de la base:
+  // si el insert fallaba, la pantalla decía «Pedido sellado» igual y el pedido
+  // no existía. Y un doble clic en «Confirmar» sellaba dos veces.
+  const [sellando, setSellando] = useState(false);
   const sealOrderLocal = async (fid, items, total) => {
-    if (!period) return;
+    if (!period || sellando) return false;
+    if (sealed[fid]) return true;
+    setSellando(true);
     const order = {
       id: Date.now().toString(),
       family_id: fid,
@@ -154,15 +181,33 @@ function App() {
       retired_at: null,
       items: JSON.stringify(items)
     };
-    await sealOrder(order);
-    setSealed(p => ({ ...p, [fid]: { ...order, items } }));
+    const res = await sealOrder(order);
+    setSellando(false);
+    if (!res || res.error) {
+      // Ya había uno (otra pestaña, u otra persona haciendo el pedido por ella):
+      // se trae el que existe en vez de mostrar un error que no se puede
+      // resolver desde acá.
+      if (res && res.duplicado) { await recargarPedidos(); return true; }
+      alert('No se pudo sellar el pedido: ' + ((res && res.error) || 'revisa tu conexión') + '\n\nTu carrito sigue guardado; intenta de nuevo.');
+      return false;
+    }
+    setSealed(p => ({ ...p, [fid]: { ...res, items } }));
     setCarts(p => ({ ...p, [fid]: {} }));
+    deleteDraft(period.id, fid);
+    return true;
   };
 
   const unsealOrderLocal = async (fid) => {
     const ord = sealed[fid];
     if (!ord || ord.retired) return;
     const items = typeof ord.items === 'string' ? JSON.parse(ord.items) : ord.items;
+    const cart = {};
+    items.forEach(i => { cart[i.id] = i.qty; });
+
+    // El carrito se guarda ANTES de borrar el pedido: si la familia cierra la
+    // pestaña justo después de «Modificar», el carrito queda y se sella solo al
+    // cierre. Al revés, se quedaría sin pedido y sin carrito.
+    if (period) await saveDraft(period.id, fid, cart);
 
     // Hay que BORRAR la fila, no solo sacarla del estado de React. Al volver a
     // sellar se inserta una fila nueva con otro id, así que sin este borrado cada
@@ -174,15 +219,15 @@ function App() {
       return;
     }
 
-    const cart = {};
-    items.forEach(i => { cart[i.id] = i.qty; });
     setCarts(p => ({ ...p, [fid]: cart }));
     setSealed(p => { const n = { ...p }; delete n[fid]; return n; });
   };
 
   const markRetiredLocal = async (fid) => {
-    await markRetired(sealed[fid].id);
-    setSealed(p => ({ ...p, [fid]: { ...p[fid], retired: true, retired_at: new Date().toISOString() } }));
+    const res = await markRetired(sealed[fid].id);
+    if (!res) return false;
+    setSealed(p => ({ ...p, [fid]: { ...p[fid], retired: true, retired_at: res.retired_at || new Date().toISOString() } }));
+    return true;
   };
 
   if (loading) {
@@ -240,6 +285,8 @@ function App() {
         unsealOrderLocal={unsealOrderLocal}
         markRetiredLocal={markRetiredLocal}
         updateFamilyBalance={updateFamilyBalance}
+        recargarPedidos={recargarPedidos}
+        sellando={sellando}
       />
       </>
     );
@@ -261,6 +308,7 @@ function App() {
       period={period}
       cargos={cargos}
       logout={logout}
+      sellando={sellando}
     />
     </>
   );
@@ -445,7 +493,7 @@ function Welcome({ families, onLogin, period, aviso }) {
 
 // ─── FAMILY APP ───────────────────────────────────────────────────────────────
 
-function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargos, logout }) {
+function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLocal, unsealOrderLocal, carts, setCarts, period, cargos, logout, sellando = false }) {
   const [tab, setTab] = useState('catalog');
   const [cat, setCat] = useState('all');
   const [srch, setSrch] = useState('');
@@ -461,19 +509,51 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   // Lo que los proveedores respondieron. Sin esto la familia veía su total a
   // pagar sin enterarse de que el proveedor ya había avisado que no traía algo.
   const [ordenesProv, setOrdenesProv] = useState([]);
+  // Las mermas también restan del stock de bodega. Sin ellas la familia veía
+  // disponible un producto que ya se había echado a perder, y el intento de
+  // reservarlo lo rechazaba la base sin que la pantalla supiera por qué.
+  const [bajas, setBajas] = useState([]);
 
   useEffect(() => {
     if (!period) return;
     Promise.all([
       getBodega(period.id), getBodegaAssignments(period.id), getAdjustments(period.id),
-      getPurchaseOrders(period.id),
-    ]).then(([itms, asns, ajs, ocs]) => {
+      getPurchaseOrders(period.id), getBajas(period.id),
+    ]).then(([itms, asns, ajs, ocs, bjs]) => {
       setBodega(itms);
       setBodegaAssignments(asns);
       setAjustes((ajs || []).filter(a => a.family_id === user.id));
       setOrdenesProv(ocs || []);
+      setBajas(bjs || []);
     });
   }, [period, user.id]);
+
+  // ── Carrito guardado ──────────────────────────────────────────────────────
+  // Se recupera al entrar y se guarda mientras se arma (migración 013). Así no
+  // se pierde al cerrar la pestaña, y si la familia nunca sella, la base lo
+  // sella sola al cierre de pedidos.
+  const [borradorListo, setBorradorListo] = useState(false);
+  const [borradorEstado, setBorradorEstado] = useState(null); // null | 'guardado' | 'no_disponible'
+  useEffect(() => {
+    setBorradorListo(false);
+    if (!period || sealed[user.id]) { setBorradorListo(true); return; }
+    let cancel = false;
+    getDraft(period.id, user.id).then(d => {
+      if (cancel) return;
+      if (d && d.items && typeof d.items === 'object') {
+        const recuperado = {};
+        Object.entries(d.items).forEach(([id, q]) => { if (Number(q) > 0) recuperado[id] = Number(q); });
+        // Solo si el carrito en pantalla está vacío: lo que se está armando
+        // ahora manda sobre lo guardado.
+        setCarts(p => (Object.keys(p[user.id] || {}).some(k => (p[user.id] || {})[k] > 0)
+          ? p : { ...p, [user.id]: recuperado }));
+        if (Object.keys(recuperado).length) setBorradorEstado('guardado');
+      }
+      setBorradorListo(true);
+    });
+    return () => { cancel = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period?.id, user.id]);
 
   const cart = useMemo(() => carts[user.id] || {}, [carts, user.id]);
   const setCart = fn => setCarts(p => ({ ...p, [user.id]: fn(p[user.id] || {}) }));
@@ -501,12 +581,16 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   const ord = sealed[user.id];
   const saldo = currentUser.balance || 0;
 
+  // Misma cuenta que el panel: lo asignado Y lo dado de baja.
   const getBodegaRemaining = (itemId) => {
     const item = bodega.find(i => i.id === itemId);
-    if (!item) return 0;
-    const used = bodegaAssignments.filter(a => a.bodega_id === itemId).reduce((s, a) => s + parseFloat(a.quantity), 0);
-    return Math.max(0, parseFloat(item.quantity) - used);
+    return disponibleEnBodega({ item, asignaciones: bodegaAssignments, bajas });
   };
+
+  const stockBodega = useMemo(
+    () => stockBodegaPorProducto({ items: bodega, asignaciones: bodegaAssignments, bajas, productos: products }),
+    [bodega, bodegaAssignments, bajas, products]
+  );
 
   const myReservations = bodegaAssignments.filter(a => a.family_id === user.id);
 
@@ -550,8 +634,12 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
     if (res.aviso) setReserveErr(res.aviso);
   };
   const cats = ['all', ...new Set(products.map(p => p.category).filter(Boolean))];
+  // Sin tildes, por palabras en cualquier orden, y por producto, proveedor o
+  // categoría: el mismo criterio que los buscadores del panel. Antes hacía
+  // `p.provider.toLowerCase()` y un solo producto sin proveedor bastaba para
+  // que la pantalla entera se cayera al escribir la primera letra.
   const vis = useMemo(() =>
-    products.filter(p => (cat === 'all' || p.category === cat) && (!srch || p.name.toLowerCase().includes(srch.toLowerCase()) || p.provider.toLowerCase().includes(srch.toLowerCase()))),
+    products.filter(p => (cat === 'all' || p.category === cat) && coincide(textoDeProducto(p), srch)),
     [cat, srch, products]
   );
 
@@ -563,6 +651,20 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
   const noAbierto = ventana.fase === 'por_abrir';
   const cerrado = ventana.cerrados;
   const puedeOrdenar = ventana.abiertos;
+
+  // Guarda el carrito mientras se arma, con una pausa corta para no escribir en
+  // cada clic de «+». Solo mientras se pueda pedir y no haya pedido sellado.
+  useEffect(() => {
+    if (!borradorListo || !period || ord || !puedeOrdenar) return;
+    const t = setTimeout(() => {
+      saveDraft(period.id, user.id, cart).then(ok => {
+        const hay = Object.values(cart).some(q => q > 0);
+        setBorradorEstado(ok ? (hay ? 'guardado' : null) : 'no_disponible');
+      });
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, borradorListo, ord, puedeOrdenar]);
 
   const daysLeft = period?.date_to ? Math.ceil((new Date(period.date_to + 'T23:59:59') - now) / 864e5) : null;
   const daysToDelivery = period?.date_delivery ? Math.ceil((new Date(period.date_delivery + 'T23:59:59') - now) / 864e5) : null;
@@ -690,8 +792,10 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                 return (
                   <div key={pr.id} className="lift" style={{ padding: '0.9rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', opacity: pr.in_stock ? 1 : 0.55, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                     <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 7px', borderRadius: '4px', background: pr.in_stock ? '#e8f5e9' : '#ffebee', color: pr.in_stock ? '#2e7d32' : '#c62828' }}>{pr.in_stock ? '✓ Disponible' : 'Sin stock'}</span>
+                    {stockBodega.get(pr.id) && <BadgeBodega info={stockBodega.get(pr.id)} compacto />}
                     <p style={{ fontWeight: 600, fontSize: '12px', lineHeight: 1.35, marginTop: '8px', marginBottom: '3px', color: '#222' }}>{pr.name}</p>
                     <p style={{ fontSize: '10px', color: '#888', marginBottom: '4px' }}>{pr.unit} · {pr.provider}</p>
+                    {pr.description && <p style={{ fontSize: '10px', color: '#aaa', fontStyle: 'italic', marginBottom: '4px', lineHeight: 1.4 }}>{pr.description}</p>}
                     <p style={{ fontWeight: 700, fontSize: '14px', marginBottom: '10px', color: '#2d5a2d' }}>${pr.price.toLocaleString('es-CL')}</p>
                     {lk
                       ? qty > 0 ? <div style={{ textAlign: 'center', fontSize: '11px', padding: '5px', background: '#f0f7f0', borderRadius: '6px', color: '#2e7d32', fontWeight: 500 }}>{qty} en pedido</div> : <div style={{ height: '28px' }} />
@@ -751,7 +855,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                   <label style={{ fontSize: '12px', color: '#666', display: 'block', marginBottom: '6px' }}>
                     Cantidad ({reservingItem.unit}) — máx {getBodegaRemaining(reservingItem.id)}
                   </label>
-                  <input type="number" step="0.5" placeholder="0" value={reserveQty}
+                  <input type="number" step="any" placeholder="0" value={reserveQty}
                     onChange={e => { setReserveQty(e.target.value); setReserveErr(''); }}
                     autoFocus
                     style={{ width: '100%', padding: '10px', border: '2px solid #90caf9', borderRadius: '8px', fontSize: '18px', textAlign: 'center', boxSizing: 'border-box', marginBottom: '8px', outline: 'none' }} />
@@ -787,6 +891,11 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                   <div>
                     <p style={{ fontSize: '14px', fontWeight: 600, color: ord.retired ? '#2e7d32' : '#1565c0', margin: 0 }}>✓ {ord.retired ? 'Pedido entregado' : 'Pedido sellado'}</p>
                     <p style={{ fontSize: '11px', color: '#666', margin: '4px 0 0' }}>Sellado: {new Date(ord.sealed_at).toLocaleString('es-CL')}</p>
+                    {ord.sealed_auto && (
+                      <p style={{ fontSize: '11px', color: '#6a1b9a', margin: '4px 0 0', fontWeight: 500 }}>
+                        ⏱ Lo selló el sistema al cierre de pedidos, con lo que había en tu carrito.
+                      </p>
+                    )}
                   </div>
                   {!ord.retired && puedeOrdenar && <button onClick={() => unsealOrderLocal(user.id)} style={{ padding: '6px 14px', background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>Modificar</button>}
                 </div>
@@ -866,7 +975,7 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                     { l: '📭 No confirmados por el proveedor', v: cuenta.noConfirmados, mostrar: cuenta.noConfirmados !== 0 },
                     { l: '❗ Faltantes en tu caja', v: cuenta.faltantes, mostrar: cuenta.faltantes !== 0 },
                     { l: '➕ Extras', v: cuenta.extras, mostrar: cuenta.extras !== 0 },
-                    { l: 'Saldo anterior (' + (saldo > 0 ? 'a favor' : 'pendiente') + ')', v: -saldo, mostrar: saldo !== 0 },
+                    { l: 'Tu saldo ' + (saldo > 0 ? 'a favor' : 'pendiente') + ' (incluye pagos ya registrados)', v: -saldo, mostrar: saldo !== 0 },
                   ].filter(r => r.mostrar).map(r => (
                     <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f0f7f0' }}>
                       <span style={{ fontSize: '13px', color: '#555' }}>{r.l}</span>
@@ -950,8 +1059,21 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                 </div>
                 {saldo !== 0 && (
                   <div style={{ padding: '10px 12px', background: saldo > 0 ? '#e8f5e9' : '#ffebee', border: `1px solid ${saldo > 0 ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: '13px', color: '#555' }}>Saldo anterior</span>
+                    <span style={{ fontSize: '13px', color: '#555' }}>Tu saldo actual</span>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: saldo > 0 ? '#2e7d32' : '#c62828' }}>{saldo > 0 ? 'A favor ' : 'Pendiente '} ${Math.abs(saldo).toLocaleString('es-CL')}</span>
+                  </div>
+                )}
+                {/* Lo que pasa si no sella. La cooperativa pidió que el carrito
+                    se selle solo al cierre, y eso hay que decirlo: si no, la
+                    familia se entera recién cuando ve un pedido que no selló. */}
+                {borradorEstado === 'guardado' && (
+                  <div style={{ padding: '9px 12px', background: '#f3e5f5', border: '1px solid #e1bee7', borderRadius: '8px', marginBottom: '1rem' }}>
+                    <p style={{ fontSize: '12px', color: '#6a1b9a', margin: 0, lineHeight: 1.5 }}>
+                      💾 Tu carrito se guarda solo.{' '}
+                      {period?.date_to
+                        ? <>Si no lo sellas, <strong>se sellará automáticamente al cierre de pedidos</strong> ({new Date(period.date_to + 'T00:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })}) con lo que tenga en ese momento.</>
+                        : <>Si no lo sellas, <strong>se sellará automáticamente cuando la comisión cierre los pedidos</strong>, con lo que tenga en ese momento.</>}
+                    </p>
                   </div>
                 )}
                 {!conf
@@ -961,8 +1083,12 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                       <p style={{ fontWeight: 600, fontSize: '14px', color: '#e65100', margin: 0 }}>¿Confirmar sellado?</p>
                       <p style={{ fontSize: '12px', color: '#666', margin: '6px 0 0' }}>Podrás modificarlo mientras el período {period?.label} esté activo.</p>
                       <div style={{ display: 'flex', gap: '8px', marginTop: '1rem' }}>
-                        <button onClick={() => { sealOrderLocal(user.id, items.map(i => ({ id: i.id, n: i.name, pv: i.provider, p: i.price, u: i.unit, qty: i.qty })), total); setConf(false); setTab('catalog'); }}
-                          style={{ flex: 1, padding: '8px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>Confirmar</button>
+                        <button disabled={sellando} onClick={async () => {
+                            const ok = await sealOrderLocal(user.id, items.map(i => ({ id: i.id, n: i.name, pv: i.provider, p: i.price, u: i.unit, qty: i.qty })), total);
+                            setConf(false);
+                            if (ok) { setBorradorEstado(null); setTab('catalog'); }
+                          }}
+                          style={{ flex: 1, padding: '8px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: sellando ? 'wait' : 'pointer', fontWeight: 600, opacity: sellando ? 0.7 : 1 }}>{sellando ? 'Sellando...' : 'Confirmar'}</button>
                         <button onClick={() => setConf(false)} style={{ flex: 1, padding: '8px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer' }}>Cancelar</button>
                       </div>
                     </div>
@@ -1096,7 +1222,7 @@ function SaldoFamilia({ user, ord, cargo, misCargos = [], period, ajustes = [] }
         <p style={{ fontSize: '12px', fontWeight: 700, color: '#2e7d32', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 12px' }}>Período {period?.label}</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f0f7f0' }}>
-            <span style={{ fontSize: '13px', color: '#555' }}>Saldo anterior</span>
+            <span style={{ fontSize: '13px', color: '#555' }}>Saldo actual (incluye pagos registrados)</span>
             <span style={{ fontSize: '13px', fontWeight: 600, color: saldo > 0 ? '#2e7d32' : saldo < 0 ? '#c62828' : '#888' }}>
               {saldo > 0 ? '+ ' : saldo < 0 ? '- ' : ''} ${Math.abs(saldo).toLocaleString('es-CL')}
             </span>
@@ -1167,11 +1293,24 @@ function SaldoFamilia({ user, ord, cargo, misCargos = [], period, ajustes = [] }
 
 // ─── ADMIN APP ────────────────────────────────────────────────────────────────
 
-function AdminApp({ user, families, setFamilies, products, setProducts, providers, setProviders, sealed, setSealed, period, setPeriod, cargos, recargarCargos, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance }) {
+function AdminApp({ user, families, setFamilies, products, setProducts, providers, setProviders, sealed, setSealed, period, setPeriod, cargos, recargarCargos, logout, carts, setCarts, sealOrderLocal, unsealOrderLocal, markRetiredLocal, updateFamilyBalance, recargarPedidos, sellando }) {
   const [tab, setTab] = useState('dashboard');
   const [hacerPedidoFam, setHacerPedidoFam] = useState(null);
-  const [reseteando, setReseteando] = useState(false);
-  const [resetMsg, setResetMsg] = useState('');
+
+  // Stock de bodega del período, para que los buscadores de productos de
+  // cualquier pestaña puedan avisar «esto también está en bodega». Se recarga
+  // al cambiar de pestaña: la pestaña Bodega es donde cambia.
+  const [stockBodega, setStockBodega] = useState(new Map());
+  useEffect(() => {
+    if (!period) { setStockBodega(new Map()); return; }
+    let cancel = false;
+    Promise.all([getBodega(period.id), getBodegaAssignments(period.id), getBajas(period.id)])
+      .then(([items, asignaciones, bajas]) => {
+        if (cancel) return;
+        setStockBodega(stockBodegaPorProducto({ items: items || [], asignaciones: asignaciones || [], bajas: bajas || [], productos: products }));
+      });
+    return () => { cancel = true; };
+  }, [period, products, tab]);
 
   // Quién es socia que pide. **Todas**, incluidas las que están en una comisión.
   //
@@ -1209,22 +1348,6 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
       .then(d => setConfigServidor(d))
       .catch(() => { /* sin funciones serverless (npm start): se ignora */ });
   }, []);
-
-  const handleReset = async () => {
-    if (!window.confirm('¿Resetear la demo? Se borrarán todos los pedidos, órdenes y movimientos del período de prueba.')) {
-      return;
-    }
-    setReseteando(true);
-    setResetMsg('');
-    const res = await resetDemo();
-    setReseteando(false);
-    if (res.ok) {
-      setResetMsg('Demo reseteada exitosamente. Recarga la página para ver los cambios.');
-      setTimeout(() => window.location.reload(), 2000);
-    } else {
-      setResetMsg('Error: ' + (res.data?.error || res.error || 'No se pudo resetear'));
-    }
-  };
 
   const todasLasTabs = [
     { id: 'dashboard', l: 'Resumen', ic: '📊' },
@@ -1276,6 +1399,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
           period={period}
           cargos={cargos}
           logout={() => setHacerPedidoFam(null)}
+          sellando={sellando}
         />
       </div>
     );
@@ -1315,12 +1439,6 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
           </button>
         ))}
         <div style={{ marginLeft: 'auto', paddingRight: '0.75rem', flexShrink: 0, display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {esAdmin(user) && (
-            <button onClick={handleReset} disabled={reseteando}
-              style={{ padding: '5px 12px', background: '#ff9800', color: 'white', border: 'none', borderRadius: '6px', cursor: reseteando ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', opacity: reseteando ? 0.7 : 1 }}>
-              {reseteando ? 'Reseteando...' : '🔄 Reset Demo'}
-            </button>
-          )}
           <button onClick={() => setHacerPedidoFam(user)}
             style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap' }}>
             🛒 Mi pedido
@@ -1353,29 +1471,21 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
         </div>
       )}
 
-      {resetMsg && (
-        <div style={{ background: resetMsg.includes('Error') ? '#ffebee' : '#e8f5e9', borderBottom: `1px solid ${resetMsg.includes('Error') ? '#ef9a9a' : '#81c784'}`, padding: '11px 1rem' }}>
-          <p style={{ fontSize: '12px', color: resetMsg.includes('Error') ? '#c62828' : '#2e7d32', margin: 0, lineHeight: 1.6, fontWeight: 500 }}>
-            {resetMsg}
-          </p>
-        </div>
-      )}
-
       <div style={{ padding: '1rem' }} className="tab-panel" key={tabActiva}>
         {tabActiva === 'dashboard' && <AdminDashboard families={na} sealed={sealed} cargos={cargos} setTab={setTab} period={period} />}
         {tabActiva === 'analitica' && <AdminAnalytics families={families} products={products} />}
         {tabActiva === 'pedidos' && <AdminPedidos families={na} sealed={sealed} cargos={cargos} products={products} onHacerPedido={fam => setHacerPedidoFam(fam)} period={period} />}
         {tabActiva === 'consolidado' && <AdminConsolidado families={families} sealed={sealed} products={products} providers={providers} period={period} user={user} />}
         {tabActiva === 'retiros' && <AdminRetiros families={na} sealed={sealed} cargos={cargos} setSealed={setSealed} period={period} products={products} currentAdmin={user} />}
-        {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargos={cargos} />}
+        {tabActiva === 'ajustes' && <AdminAjustes families={na} sealed={sealed} products={products} period={period} cargos={cargos} currentAdmin={user} enBodega={stockBodega} />}
         {tabActiva === 'flujo' && <AdminFlujoCaja period={period} cargos={cargos} recargarCargos={recargarCargos} families={families} setFamilies={setFamilies} sealed={sealed} currentAdmin={user} puedeEximir={puedeEximir} />}
         {tabActiva === 'bodega' && <AdminBodega period={period} families={na} setFamilies={setFamilies} products={products} currentAdmin={user} />}
         {tabActiva === 'familias' && <AdminFamilias families={families} setFamilies={setFamilies} sealed={sealed} onHacerPedido={fam => setHacerPedidoFam(fam)} currentAdmin={user} />}
         {tabActiva === 'proveedores' && <AdminProveedores providers={providers} setProviders={setProviders} products={products} setProducts={setProducts} />}
-        {tabActiva === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} />}
-        {tabActiva === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargos={cargos} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} />}
-        {tabActiva === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} sealed={sealed} cargos={cargos} recargarCargos={recargarCargos} currentAdmin={user} />}
-        {tabActiva === 'importar' && <AdminImportar products={products} setProducts={setProducts} providers={providers} currentAdmin={user} />}
+        {tabActiva === 'productos' && <AdminProductos products={products} setProducts={setProducts} providers={providers} enBodega={stockBodega} />}
+        {tabActiva === 'saldos' && <AdminSaldos families={na} sealed={sealed} cargos={cargos} setFamilies={setFamilies} updateFamilyBalance={updateFamilyBalance} currentAdmin={user} />}
+        {tabActiva === 'periodo' && <AdminPeriodo period={period} setPeriod={setPeriod} families={families} setFamilies={setFamilies} sealed={sealed} cargos={cargos} recargarCargos={recargarCargos} recargarPedidos={recargarPedidos} currentAdmin={user} />}
+        {tabActiva === 'importar' && <AdminImportar products={products} setProducts={setProducts} providers={providers} currentAdmin={user} enBodega={stockBodega} />}
         {tabActiva === 'reportes' && <AdminReportes families={families} products={products} providers={providers} currentAdmin={user} period={period} />}
         {tabActiva === 'actividad' && <AdminLogs />}
       </div>
@@ -1383,7 +1493,7 @@ function AdminApp({ user, families, setFamilies, products, setProducts, provider
   );
 }
 
-function AdminSaldos({ families, sealed, cargos, setFamilies, updateFamilyBalance }) {
+function AdminSaldos({ families, sealed, cargos, setFamilies, updateFamilyBalance, currentAdmin }) {
   const [editId, setEditId] = useState(null);
   const [editVal, setEditVal] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1392,13 +1502,28 @@ function AdminSaldos({ families, sealed, cargos, setFamilies, updateFamilyBalanc
   const favor = families.filter(f => f.balance > 0);
   const alDia = families.filter(f => f.balance === 0);
 
+  // Una corrección a mano es la única forma de mover un saldo sin un pago, un
+  // pedido o un ajuste detrás. Queda en Actividad con el valor anterior y el
+  // nuevo: sin eso, en la asamblea nadie puede explicar de dónde salió.
   const saveBalance = async (fid) => {
+    const fam = families.find(f => f.id === fid);
+    const val = parseInt(editVal, 10) || 0;
+    if (fam && val === (fam.balance || 0)) { setEditId(null); return; }
     setSaving(true);
-    const val = parseInt(editVal) || 0;
-    await updateFamilyBalance(fid, val);
-    setFamilies(p => p.map(f => f.id === fid ? { ...f, balance: val } : f));
-    setEditId(null);
+    const res = await updateFamilyBalance(fid, val);
     setSaving(false);
+    if (!res) { alert('No se pudo guardar el saldo. Revisa la conexión e intenta de nuevo.'); return; }
+    setFamilies(p => p.map(f => f.id === fid ? { ...f, balance: Number(res.balance) } : f));
+    if (currentAdmin && fam) {
+      addAdminLog({
+        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.name,
+        action: 'saldo_corregido',
+        details: fam.name + ': saldo corregido a mano de ' + clp(fam.balance || 0) + ' a ' + clp(val),
+      });
+    }
+    setEditId(null);
   };
 
   return (

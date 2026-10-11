@@ -246,6 +246,15 @@ export async function getSealedOrders(periodId) {
   return data || [];
 }
 
+// Igual, pero distingue «no hay pedidos» (lista vacía) de «no se pudo leer»
+// (null). El cierre de período la necesita: tratar un error de red como «nadie
+// pidió» cerraría el período sin cobrarle a nadie.
+export async function getSealedOrdersOrNull(periodId) {
+  const { data, error } = await supabase.from('sealed_orders').select('*').eq('period_id', periodId).order('sealed_at', { ascending: true });
+  if (error) { console.error('getSealedOrders error:', error.message); return null; }
+  return data || [];
+}
+
 export async function getPeriod() {
   const { data } = await supabase.from('periods').select('*').eq('active', true).single();
   return data;
@@ -272,14 +281,140 @@ export async function getAllCashFlow() {
 // Supabase v2: insert/update without .select() returns null data even on success.
 // All mutating functions below use .select() so callers get real data back.
 
+// Devuelve la fila, o { error }. Antes devolvía null al fallar y quien llamaba
+// no lo miraba: la pantalla decía «Pedido sellado» aunque la base lo hubiera
+// rechazado, y al recargar el pedido no existía.
 export async function sealOrder(order) {
   const { data, error } = await supabase
     .from('sealed_orders')
     .insert([order])
     .select()
     .single();
-  if (error) console.error('sealOrder error:', error.message);
+  if (error) {
+    console.error('sealOrder error:', error.message);
+    const dup = error.code === '23505' || /duplicate key|already exists/i.test(error.message || '');
+    return { error: dup ? 'Ya hay un pedido sellado para esta familia en este período. Recarga la página.' : error.message, duplicado: dup };
+  }
   return data;
+}
+
+// ─── CARRITOS GUARDADOS (migración 013) ──────────────────────────────────────
+//
+// El carrito vivía solo en la memoria del navegador: cerrar la pestaña lo
+// borraba, y si la familia nunca sellaba se quedaba sin pedido. Ahora se guarda
+// mientras se arma, y al cierre de pedidos la base sella lo que quedó.
+//
+// Todo degrada: sin la migración, estas funciones fallan en silencio y el
+// carrito se comporta como antes.
+
+let borradoresDisponibles = true;
+
+export async function getDraft(periodId, familyId) {
+  if (!borradoresDisponibles) return null;
+  const { data, error } = await supabase.from('order_drafts')
+    .select('items,updated_at').eq('period_id', periodId).eq('family_id', familyId).maybeSingle();
+  if (error) {
+    if (/order_drafts|relation|schema cache/i.test(error.message || '')) borradoresDisponibles = false;
+    else console.error('getDraft error:', error.message);
+    return null;
+  }
+  return data;
+}
+
+export async function getDrafts(periodId) {
+  if (!borradoresDisponibles) return [];
+  const { data, error } = await supabase.from('order_drafts').select('family_id,items,updated_at').eq('period_id', periodId);
+  if (error) {
+    if (/order_drafts|relation|schema cache/i.test(error.message || '')) borradoresDisponibles = false;
+    return [];
+  }
+  return data || [];
+}
+
+// `cart` es { productId: cantidad }. Un carrito vacío se borra: no hay nada que
+// sellar, y dejarlo haría aparecer a la familia como «con carrito pendiente».
+export async function saveDraft(periodId, familyId, cart) {
+  if (!borradoresDisponibles) return false;
+  const items = {};
+  Object.entries(cart || {}).forEach(([id, q]) => { if (Number(q) > 0) items[id] = Number(q); });
+  const vacio = Object.keys(items).length === 0;
+  const { error } = vacio
+    ? await supabase.from('order_drafts').delete().eq('period_id', periodId).eq('family_id', familyId)
+    : await supabase.from('order_drafts').upsert([{ period_id: periodId, family_id: familyId, items, updated_at: new Date().toISOString() }]);
+  if (error) {
+    if (/order_drafts|relation|schema cache/i.test(error.message || '')) borradoresDisponibles = false;
+    else console.error('saveDraft error:', error.message);
+    return false;
+  }
+  return true;
+}
+
+export async function deleteDraft(periodId, familyId) {
+  return saveDraft(periodId, familyId, {});
+}
+
+// Sella los carritos de un período cuya ventana de pedidos ya cerró. La función
+// de la base no hace nada si los pedidos siguen abiertos, así que llamarla de
+// más no tiene costo. Devuelve cuántos selló, o null si falta la migración.
+export async function sellarBorradores(periodId) {
+  const { data, error } = await supabase.rpc('coop_sellar_borradores', { p_period_id: periodId });
+  if (error) {
+    if (!/coop_sellar_borradores|function|schema cache/i.test(error.message || '')) console.error('sellarBorradores error:', error.message);
+    return null;
+  }
+  return Number(data) || 0;
+}
+
+// ─── SALDOS: SUMAR EN LA BASE, NO SOBRESCRIBIR ───────────────────────────────
+//
+// Todo movimiento de saldo (un pago, su reverso) es «saldo + delta» hecho por
+// la base. Antes el navegador calculaba «saldo que tengo en pantalla ± monto» y
+// lo sobrescribía, y la pantalla podía estar vieja: después de cerrar el
+// período seguía mostrando los saldos de antes del cobro, y el primer pago
+// registrado borraba el cobro entero.
+//
+// Sin la migración 013 se cae a leer el saldo FRESCO de la base justo antes de
+// escribir. No es atómico, pero ya no depende de lo que muestre la pantalla.
+// Devuelve el saldo nuevo, o { error }.
+export async function moverSaldo(familyId, delta) {
+  const d = Math.round(Number(delta) || 0);
+  const { data, error } = await supabase.rpc('coop_mover_saldo', { p_family_id: familyId, p_delta: d });
+  if (!error) return Number(data) || 0;
+  if (!/coop_mover_saldo|function|schema cache/i.test(error.message || '')) {
+    console.error('moverSaldo error:', error.message);
+    return { error: error.message };
+  }
+  const actual = await saldoActual(familyId);
+  if (actual === null) return { error: 'No se pudo leer el saldo actual de la familia.' };
+  const r = await updateFamilyBalance(familyId, actual + d);
+  if (!r) return { error: 'No se pudo actualizar el saldo.' };
+  return Number(r.balance);
+}
+
+// Cobra un pedido al cerrar el período: baja el saldo y marca el pedido como
+// cobrado, juntos. Si ya estaba cobrado no hace nada y devuelve { yaCobrado }.
+// Devuelve { balance } o { error }.
+export async function cobrarPedido(order, monto) {
+  const m = Math.round(Number(monto) || 0);
+  const { data, error } = await supabase.rpc('coop_cobrar_pedido', { p_order_id: order.id, p_monto: m });
+  if (!error) return data === null ? { yaCobrado: true } : { balance: Number(data) };
+  if (!/coop_cobrar_pedido|function|schema cache/i.test(error.message || '')) {
+    console.error('cobrarPedido error:', error.message);
+    return { error: error.message };
+  }
+  // Sin la migración 013: se mira en la BASE si ya se cobró (no en la pantalla,
+  // que puede estar vieja), se marca primero y recién después se mueve el
+  // saldo. Si falla entre los dos pasos queda marcado sin cobrar, que se ve y
+  // se corrige; al revés quedaría cobrado dos veces sin que nadie lo note.
+  const { data: fila } = await supabase.from('sealed_orders').select('charged_at').eq('id', order.id).single();
+  if (fila && fila.charged_at) return { yaCobrado: true };
+  const marcado = await markOrderCharged(order.id, m);
+  if (marcado && marcado.error) return { error: marcado.error };
+  const actual = await saldoActual(order.family_id);
+  if (actual === null) return { error: 'Pedido marcado como cobrado, pero no se pudo leer el saldo. Corrígelo en Saldos.' };
+  const r = await updateFamilyBalance(order.family_id, actual - m);
+  if (!r) return { error: 'Pedido marcado como cobrado, pero el saldo no se actualizó. Corrígelo en Saldos.' };
+  return { balance: Number(r.balance) };
 }
 
 export async function unsealOrder(orderId) {
@@ -321,13 +456,23 @@ export async function updateFamilyBalance(familyId, balance) {
   return data;
 }
 
+// Si existe el índice de la migración 014, la base rechaza un producto con el
+// mismo nombre (sin importar mayúsculas ni espacios) del mismo proveedor.
+function traducirErrorProducto(error) {
+  const dup = error.code === '23505' || /duplicate key|already exists/i.test(error.message || '');
+  return dup ? { error: 'Ya existe un producto con ese nombre de este proveedor.' } : null;
+}
+
 export async function addProduct(product) {
   const { data, error } = await supabase
     .from('products')
     .insert([product])
     .select()
     .single();
-  if (error) console.error('addProduct error:', error.message);
+  if (error) {
+    console.error('addProduct error:', error.message);
+    return traducirErrorProducto(error) || null;
+  }
   return data;
 }
 
@@ -338,8 +483,19 @@ export async function updateProduct(id, updates) {
     .eq('id', id)
     .select()
     .single();
-  if (error) console.error('updateProduct error:', error.message);
+  if (error) {
+    console.error('updateProduct error:', error.message);
+    return traducirErrorProducto(error) || null;
+  }
   return data;
+}
+
+// Sin FK hacia products: el historial de precios y la bodega conservan sus
+// propias fotos, así que borrar el maestro no les hace nada.
+export async function deleteProduct(id) {
+  const { error } = await supabase.from('products').delete().eq('id', id);
+  if (error) { console.error('deleteProduct error:', error.message); return { error: error.message }; }
+  return true;
 }
 
 export async function updatePeriod(periodId, updates) {
@@ -460,7 +616,12 @@ export async function getBodega(periodId) {
 }
 
 export async function addBodegaItem(item) {
-  const { data, error } = await supabase.from('bodega').insert([item]).select().single();
+  let { data, error } = await supabase.from('bodega').insert([item]).select().single();
+  // Sin la migración 013 no existe `product_id`: se guarda sin él, como antes.
+  if (error && 'product_id' in item && /product_id/.test(error.message || '')) {
+    const { product_id, ...resto } = item;
+    ({ data, error } = await supabase.from('bodega').insert([resto]).select().single());
+  }
   if (error) { console.error('addBodegaItem error:', error.message); return null; }
   return data;
 }
@@ -1077,7 +1238,16 @@ async function saldoActual(familyId) {
   return data ? Number(data.balance) || 0 : null;
 }
 
-export async function asignarBodegaConCargo(assignment, saldoAntes) {
+// `saldoPantalla` ya no se usa para calcular: es el saldo que la pantalla tenía
+// cargado, y podía estar viejo (por ejemplo, después de cerrar un período sin
+// recargar). Con un saldo viejo, «esperado» no calzaba con lo que el trigger
+// dejó, el código creía que el trigger no existía y SOBRESCRIBÍA el saldo con
+// una cifra calculada sobre el valor viejo. Ahora el punto de partida se lee de
+// la base justo antes de insertar.
+export async function asignarBodegaConCargo(assignment, saldoPantalla) {
+  const antes = await saldoActual(assignment.family_id);
+  const saldoAntes = antes === null ? (Number(saldoPantalla) || 0) : antes;
+
   const creada = await addBodegaAssignment(assignment);
   if (!creada) return { error: 'No se pudo asignar. Revisa la conexión e intenta de nuevo.' };
   // La base rechazó la reserva. El caso normal es que otra familia alcanzó a
@@ -1085,14 +1255,18 @@ export async function asignarBodegaConCargo(assignment, saldoAntes) {
   // muestra tal cual en vez de traducirlo a algo más vago.
   if (creada.error) return { error: creada.error, rechazada: true };
 
-  const esperado = (Number(saldoAntes) || 0) - (Number(assignment.total_value) || 0);
+  const esperado = saldoAntes - (Number(assignment.total_value) || 0);
   const despues = await saldoActual(assignment.family_id);
 
   if (despues === null) return { asignacion: creada, balance: esperado, sinConfirmar: true };
-  if (despues === esperado) return { asignacion: creada, balance: despues, porTrigger: true };
+  // Si el saldo se movió, lo movió el trigger (migración 010/011). No se compara
+  // contra «esperado»: si entre las dos lecturas alguien registró un pago, no
+  // calzaría, y sobrescribir con «esperado» borraría ese pago.
+  if (despues !== saldoAntes) return { asignacion: creada, balance: despues, porTrigger: true };
 
-  // El trigger no está (falta la migración 010): se aplica como antes.
-  const r = await updateFamilyBalance(assignment.family_id, esperado);
+  // El saldo no se movió: el trigger no está. Se aplica sumando en la base.
+  const movido = await moverSaldo(assignment.family_id, -(Number(assignment.total_value) || 0));
+  const r = movido && movido.error ? null : { balance: movido };
   if (!r) {
     // Ni trigger ni permiso para escribir. La asignación quedó y el saldo no:
     // hay que decirlo, porque el descalce es de plata.
@@ -1101,41 +1275,31 @@ export async function asignarBodegaConCargo(assignment, saldoAntes) {
       aviso: 'Se asignó el stock, pero el saldo no se pudo actualizar. Corrígelo en Saldos y ejecuta db/migrations/010_rls_y_sesiones.sql.',
     };
   }
-  return { asignacion: creada, balance: esperado };
+  return { asignacion: creada, balance: r.balance };
 }
 
-export async function resetDemo() {
-  try {
-    const response = await fetch('/api/reset-demo', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(sesionToken ? { Authorization: 'Bearer ' + sesionToken } : {}),
-      },
-    });
-    const data = await response.json();
-    return { ok: response.ok, data };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-}
+// Mismo criterio que asignarBodegaConCargo: el saldo de partida se lee de la
+// base, no de la pantalla.
+export async function borrarAsignacionConReverso(asn, saldoPantalla) {
+  const antes = await saldoActual(asn.family_id);
+  const saldoAntes = antes === null ? (Number(saldoPantalla) || 0) : antes;
 
-export async function borrarAsignacionConReverso(asn, saldoAntes) {
   const ok = await deleteBodegaAssignment(asn.id);
   if (!ok) return { error: 'No se pudo eliminar la asignación.' };
 
-  const esperado = (Number(saldoAntes) || 0) + (Number(asn.total_value) || 0);
+  const esperado = saldoAntes + (Number(asn.total_value) || 0);
   const despues = await saldoActual(asn.family_id);
 
   if (despues === null) return { balance: esperado, sinConfirmar: true };
-  if (despues === esperado) return { balance: despues, porTrigger: true };
+  if (despues !== saldoAntes) return { balance: despues, porTrigger: true };
 
-  const r = await updateFamilyBalance(asn.family_id, esperado);
+  const movido = await moverSaldo(asn.family_id, Number(asn.total_value) || 0);
+  const r = movido && movido.error ? null : { balance: movido };
   if (!r) {
     return {
       balance: despues,
       aviso: 'Se eliminó la asignación, pero el saldo no se pudo devolver. Corrígelo en Saldos.',
     };
   }
-  return { balance: esperado };
+  return { balance: r.balance };
 }

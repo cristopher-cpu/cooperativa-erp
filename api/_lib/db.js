@@ -111,8 +111,15 @@ module.exports = {
 module.exports.getSealedOrdersForPeriod = (periodId) =>
   sb('/sealed_orders?select=*&period_id=eq.' + enc(periodId) + '&order=sealed_at.asc');
 
+// Con format_qty y format_unit (migración 008): sin ellos `formatoParaProveedor`
+// nunca veía el formato normalizado y la orden salía siempre con el texto libre.
+// Si la migración no corrió, se reintenta sin esas columnas.
 module.exports.getProductsOfProvider = (providerId) =>
-  sb('/products?select=id,name,unit,price,provider_id&provider_id=eq.' + enc(providerId));
+  sb('/products?select=id,name,unit,price,provider_id,format_qty,format_unit&provider_id=eq.' + enc(providerId))
+    .catch(e => {
+      if (!/format_/.test(e.message || '')) throw e;
+      return sb('/products?select=id,name,unit,price,provider_id&provider_id=eq.' + enc(providerId));
+    });
 
 module.exports.getPeriod = (periodId) =>
   sb('/periods?select=*&id=eq.' + enc(periodId) + '&limit=1').then(r => (r && r[0]) || null);

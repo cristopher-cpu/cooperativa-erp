@@ -35,9 +35,16 @@ export function coincide(texto, consulta) {
 
 // Filtra y ordena. Exportada aparte porque el desglose de una familia también
 // necesita filtrar sin dibujar un desplegable.
+// Qué texto se busca de un producto: nombre, proveedor y categoría. Así
+// «granero» encuentra todo lo de El Granero y «granero avena» solo su avena.
+// Todos los buscadores de productos de la aplicación usan esto, para que
+// ninguno encuentre menos que otro.
+export const textoDeProducto = (p) =>
+  [p && p.name, p && p.provider, p && p.category].filter(Boolean).join(' ');
+
 export function filtrarProductos(productos, consulta) {
   const q = normalizar(consulta).trim();
-  const lista = (productos || []).filter(p => coincide(p.name + ' ' + (p.provider || ''), consulta));
+  const lista = (productos || []).filter(p => coincide(textoDeProducto(p), consulta));
   if (!q) return lista;
   const empieza = p => normalizar(p.name).startsWith(q.split(/\s+/)[0]);
   return lista.sort((a, b) => (empieza(b) ? 1 : 0) - (empieza(a) ? 1 : 0) || a.name.localeCompare(b.name));
@@ -74,6 +81,19 @@ function Resaltado({ texto, consulta }) {
     : <React.Fragment key={i}>{z.t}</React.Fragment>)}</>;
 }
 
+// Etiqueta «en bodega». Exportada: el catálogo de la familia y el maestro de
+// productos la muestran igual que el buscador.
+export function BadgeBodega({ info, compacto = false }) {
+  if (!info) return null;
+  const n = Math.round((Number(info.disponible) || 0) * 100) / 100;
+  return (
+    <span title={'En la bodega de este período quedan ' + n + ' ' + (info.unit || '') + ' sin asignar'}
+      style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '8px', background: '#e3f2fd', color: '#1565c0', whiteSpace: 'nowrap' }}>
+      🏪 {compacto ? 'En bodega' : 'En bodega: ' + n + ' ' + (info.unit || '')}
+    </span>
+  );
+}
+
 // `value`    id del producto elegido, o '' / null
 // `onChange` recibe el producto completo, o null al limpiar
 // `subtitulo` texto opcional bajo la selección (por ejemplo cuánto pidió)
@@ -87,6 +107,9 @@ export function BuscadorProducto({
   subtitulo = null,
   autoFocus = false,
   detalleDe = null,   // (producto) => nodo, a la derecha de cada opción
+  // Map producto_id → { disponible, unit } (ver stockBodegaPorProducto). Si el
+  // producto también está en la bodega del período se avisa en la opción.
+  enBodega = null,
 }) {
   const [q, setQ] = useState('');
   const [abierto, setAbierto] = useState(false);
@@ -117,6 +140,9 @@ export function BuscadorProducto({
   }, [cursor, abierto]);
 
   const elegir = (p) => { onChange && onChange(p); setQ(''); setAbierto(false); };
+  const placeholderFinal = placeholder === 'Escribe para buscar un producto...'
+    ? 'Busca por producto, proveedor o categoría...'
+    : placeholder;
 
   const teclas = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setAbierto(true); setCursor(c => Math.min(c + 1, matches.length - 1)); }
@@ -131,6 +157,7 @@ export function BuscadorProducto({
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <div style={{ flex: 1, minWidth: 0, padding: '7px 10px', border: '1px solid #4CAF50', borderRadius: '6px', background: '#f0f7f0', fontSize: '13px', color: '#2d5a2d', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             ✓ {elegido.name} <span style={{ fontWeight: 400, color: '#5a8a5a' }}>· {elegido.unit} · ${Number(elegido.price || 0).toLocaleString('es-CL')}</span>
+            {enBodega && enBodega.get(elegido.id) && <BadgeBodega info={enBodega.get(elegido.id)} />}
           </div>
           <button type="button" onClick={() => { onChange && onChange(null); setQ(''); setAbierto(true); }}
             style={{ padding: '6px 10px', background: 'white', border: '1px solid #dde8dd', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', color: '#666', whiteSpace: 'nowrap' }}>
@@ -148,7 +175,7 @@ export function BuscadorProducto({
         type="text"
         value={q}
         autoFocus={autoFocus}
-        placeholder={placeholder}
+        placeholder={placeholderFinal}
         onChange={e => { setQ(e.target.value); setAbierto(true); }}
         onFocus={() => setAbierto(true)}
         onKeyDown={teclas}
@@ -169,7 +196,8 @@ export function BuscadorProducto({
                   style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', background: i === cursor ? '#f0f7f0' : 'white' }}>
                   <span style={{ fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     <Resaltado texto={p.name} consulta={q} />
-                    {p.provider && <span style={{ color: '#aaa', fontWeight: 400 }}> · {p.provider}</span>}
+                    {p.provider && <span style={{ color: '#aaa', fontWeight: 400 }}> · <Resaltado texto={p.provider} consulta={q} /></span>}
+                    {enBodega && enBodega.get(p.id) && <BadgeBodega info={enBodega.get(p.id)} />}
                   </span>
                   <span style={{ color: '#888', fontSize: '11px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                     {detalleDe ? detalleDe(p) : <>{p.unit} · ${Number(p.price || 0).toLocaleString('es-CL')}</>}

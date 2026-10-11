@@ -1,99 +1,43 @@
-# Resetear Demo para Presentación
+# Reiniciar para el piloto MVP
 
-**Cuándo usarlo:** Antes de cada presentación para dejar el período limpio, sin pedidos ni retiros, solo con las familias y estructura base.
+**Cuándo:** una sola vez, antes del piloto que parte el viernes 2 de octubre de 2026.
+Deja la base con un solo período (el MVP) y los saldos reales de partida que informó Ruby.
 
-## Opción 1: Desde Supabase SQL Editor (Recomendado)
+> El botón **🔄 Reset Demo** del panel se eliminó. Ponía todos los saldos en 0 con un clic,
+> y desde el piloto los saldos son reales. Además estaba roto (buscaba un período `P_DEMO`
+> que no es el activo).
 
-1. Entra a [Supabase Console](https://app.supabase.com/project/fihovunxkkkwaqsggcri)
-2. Ve a **SQL Editor**
-3. Crea una nueva query
-4. Copia este script:
+## Pasos
 
-```sql
--- RESET: Limpiar período de prueba
-BEGIN;
+1. Supabase → **SQL Editor** → nueva consulta.
+2. Pega `db/RESET-inicio-piloto-mvp.sql`.
+3. Ejecuta **solo el PASO 1** (la primera consulta). Tiene que salir un período activo con
+   «MVP» en el nombre y las tres personas: `fabian`, `paty`, `ruby`.
+4. Ejecuta el **PASO 2** completo (va en una transacción: si algo falla, no se borra nada;
+   y se niega a correr si el período activo no es el MVP o falta alguna de las tres).
+5. Ejecuta el **PASO 3** para comprobar.
+6. Recién después, ejecuta `db/migrations/013_saldos_atomicos_y_borradores.sql`.
+7. En el panel: **Período → Modificar fechas** (apertura viernes 2 de octubre, cierre, etc.).
 
--- 1. Crear período "Prueba MVP" si no existe
-INSERT INTO periods (id, label, active, date_from, date_to, created_at)
-VALUES ('P_DEMO', 'Prueba MVP', true, CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW())
-ON CONFLICT (id) DO UPDATE
-SET active = true;
+## Qué se borra y qué no
 
--- 2. Borrar todos los movimientos del período
-DELETE FROM bodega_bajas WHERE period_id = 'P_DEMO';
-DELETE FROM bodega_assignments WHERE period_id = 'P_DEMO';
-DELETE FROM bodega WHERE period_id = 'P_DEMO';
-DELETE FROM order_adjustments WHERE period_id = 'P_DEMO';
-DELETE FROM purchase_orders WHERE period_id = 'P_DEMO';
-DELETE FROM cash_flow WHERE period_id = 'P_DEMO';
-DELETE FROM sealed_orders WHERE period_id = 'P_DEMO';
+| Se borra | No se toca |
+|---|---|
+| Períodos anteriores | Familias (nombres, correos, PIN) |
+| Todos los pedidos y carritos | Comisiones de cada familia |
+| Faltantes y extras | Proveedores |
+| Órdenes de compra | Productos, precios e historial de precios |
+| Bodega, reservas y mermas | Cargos fijos del período MVP |
+| Todo el flujo de caja | Registro de actividad |
+| Fechas del período MVP (se ponen de nuevo) | |
 
--- 3. Reabrir ventana de pedidos
-UPDATE periods SET orders_closed_at = NULL WHERE id = 'P_DEMO';
+## Saldos que quedan
 
--- 4. Resetear saldos a 0
-UPDATE families SET balance = 0;
+| Familia | Saldo |
+|---|---|
+| Fabián González | +$3.650 a favor |
+| Patricia Vila | +$2.250 a favor |
+| Ruby Parraguez | −$3.200 pendiente |
+| Todas las demás | $0 |
 
-COMMIT;
-
--- Verificación
-SELECT 
-  'Pedidos' as item, (SELECT COUNT(*) FROM sealed_orders WHERE period_id = 'P_DEMO')::text as count
-UNION ALL
-SELECT 'Ordenes de compra', (SELECT COUNT(*) FROM purchase_orders WHERE period_id = 'P_DEMO')::text
-UNION ALL
-SELECT 'Ajustes', (SELECT COUNT(*) FROM order_adjustments WHERE period_id = 'P_DEMO')::text
-UNION ALL
-SELECT 'Bodega items', (SELECT COUNT(*) FROM bodega WHERE period_id = 'P_DEMO')::text
-UNION ALL
-SELECT 'Cash flow', (SELECT COUNT(*) FROM cash_flow WHERE period_id = 'P_DEMO')::text;
-```
-
-5. Haz clic en **Run**
-6. Verifica que todos los contadores den 0
-
-## Opción 2: Script Node.js (si tienes credenciales de admin)
-
-```bash
-node scripts/reset-demo.js
-```
-
-Este script:
-- Crea o busca el período "Prueba MVP"
-- Borra todos los pedidos, órdenes y movimientos
-- Resetea saldos a 0
-- Reabre la ventana de pedidos
-
-## Después del Reset
-
-Cuando estés listo para empezar la presentación:
-
-1. **Entra a la app** como admin
-2. **Ve a Período** → "Prueba MVP"
-3. **Configura las fechas** del período actual (desde hoy hasta 30 días adelante)
-4. **Abre la ventana de pedidos** para que las familias comiencen
-5. ¡Listo! Las familias ya pueden pedir
-
-## Qué se borra y qué NO
-
-✅ **SE BORRA:**
-- Todos los pedidos del período
-- Órdenes de compra
-- Faltantes y extras
-- Stock de bodega
-- Movimientos de caja
-- Marcas de período cerrado
-
-❌ **NO se toca:**
-- Familias (mantiene nombres, credenciales, perfiles)
-- Productos y proveedores
-- Configuración del período (fechas se pueden cambiar manualmente)
-- Historial de auditoría
-
-## Troubleshooting
-
-**"RLS policy error"**
-→ Usa la Opción 1 (Supabase SQL Editor). Ejecuta el SQL directamente como superuser.
-
-**"Período no encontrado"**
-→ El período se crea automáticamente en la Opción 1. Verifica que se creó con `SELECT * FROM periods;`
+Queda escrito en **Actividad** por qué cambiaron.

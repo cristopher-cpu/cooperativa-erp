@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { addFamily, addProduct, updateProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, updateFamilyBalance, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, asignarBodegaConCargo, borrarAsignacionConReverso, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, markOrderCharged, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, getBajas, addBaja, deleteBaja, unmarkRetired, copyChargesToPeriod } from './supabaseClient';
+import { addFamily, addProduct, updateProduct, deleteProduct, updatePeriod, closePeriod, createPeriod, getCashFlow, addCashFlowEntry, deleteCashFlowEntry, markRetired, setFamilyPin, updateFamilyRoles, getBodega, addBodegaItem, deleteBodegaItem, getBodegaAssignments, asignarBodegaConCargo, borrarAsignacionConReverso, addAdminLog, getAdminLogs, getPastPeriods, getAllSealedOrders, getAllCashFlow, getAllPeriods, updateFamilyContacts, getAdjustments, getAllPurchaseOrders, getAllAdjustments, getProviders, getPurchaseOrders, addAdjustmentsBulk, getBajas, addBaja, deleteBaja, unmarkRetired, copyChargesToPeriod, moverSaldo, cobrarPedido, updateAdjustment, sellarBorradores, getSealedOrdersOrNull, getFamilies, getDrafts } from './supabaseClient';
 import {
   cuentaDeFamilia, ajustesPorFamilia, metricasProveedores, estadoPedidos,
   estadoConfirmacionPorProducto, ESTADOS_CONFIRMACION, parseItems, clp,
@@ -8,7 +8,7 @@ import {
 } from './calculos';
 import { PERFILES, rolesDe, esDelPanel, etiquetasDe } from './perfiles';
 import { CumplimientoProveedores } from './CumplimientoProveedores';
-import { BuscadorProducto } from './Buscador';
+import { BuscadorProducto, coincide, textoDeProducto, BadgeBodega } from './Buscador';
 import { AdminCargos, ResumenDelPeriodo } from './AdminCargos';
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
@@ -145,8 +145,21 @@ export function AdminPedidos({ families, sealed, cargos, onHacerPedido, period }
     try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
   };
 
+  // Quién tiene carrito armado y sin sellar. Se sella solo al cierre de pedidos
+  // (migración 013), pero la comisión conviene que lo sepa antes.
+  const [borradores, setBorradores] = useState(new Map());
+  useEffect(() => {
+    if (!period) { setBorradores(new Map()); return; }
+    let cancel = false;
+    getDrafts(period.id).then(d => {
+      if (cancel) return;
+      setBorradores(new Map((d || []).map(x => [x.family_id, x])));
+    });
+    return () => { cancel = true; };
+  }, [period, sealed]);
+
   const filteredFamilies = families
-    .filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()))
+    .filter(f => coincide(f.name, srch))
     .filter(f => {
       if (statusFilter === 'sellados') return !!sealed[f.id];
       if (statusFilter === 'pendientes') return !sealed[f.id];
@@ -182,6 +195,10 @@ export function AdminPedidos({ families, sealed, cargos, onHacerPedido, period }
                   <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
                   <p style={{ fontSize: '11px', color: '#888', margin: '2px 0 0' }}>
                     {o ? `Sellado ${new Date(o.sealed_at).toLocaleString('es-CL')}` : 'Pendiente por sellar'}
+                    {o && o.sealed_auto && <span style={{ color: '#6a1b9a', fontWeight: 600 }}> · sellado automático</span>}
+                    {!o && borradores.has(f.id) && (
+                      <span style={{ color: '#6a1b9a', fontWeight: 600 }}> · 🛒 tiene carrito sin sellar (se sella solo al cierre)</span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -282,19 +299,42 @@ export function AdminRetiros({ families, sealed, cargos, setSealed, period, prod
   );
 
   const getItems = (ord) => parseItems(ord);
+  const ajustesDe = useMemo(() => ajustesPorFamilia(ajustes), [ajustes]);
 
-  const markRet = async (fid, ordId) => {
-    setTrabajando(fid); setMsg(null);
+  // El retiro no se condiciona a nada (decisión de la cooperativa, 27-sep-2026):
+  // ni al pago ni a que alguien haya pasado antes por Faltantes y Extras. Lo
+  // único que antes obligaba a detenerse —el proveedor avisó que no trae algo y
+  // el descuento no estaba aplicado— se aplica acá mismo, en el mismo clic, para
+  // que a la familia nunca se le cobre lo que no llegó.
+  const markRet = async (fam, ord) => {
+    setTrabajando(fam.id); setMsg(null);
+    const pend = (porFamilia.get(fam.id) || {}).noTrae || [];
+    let descontados = 0;
+    if (pend.length) {
+      const r = await addAdjustmentsBulk(pend);
+      if (r && r.error) {
+        // El retiro igual se marca: la caja ya se está entregando. El descuento
+        // queda pendiente y se ve en Faltantes y Extras.
+        setMsg({ tipo: 'err', texto: 'El retiro se marcará, pero no se pudo aplicar el descuento de lo que el proveedor no trajo: ' + r.error + '. Aplícalo en Faltantes y Extras.' });
+      } else {
+        descontados = pend.length;
+        const frescos = await getAdjustments(period.id);
+        setAjustes(frescos || []);
+      }
+    }
     // `markRetired` devuelve la fila, o null si falló. Antes no se miraba el
     // resultado: la pantalla decía "Retirado" aunque la base hubiera rechazado
     // la escritura, y al recargar el pedido volvía a aparecer pendiente.
-    const res = await markRetired(ordId);
+    const res = await markRetired(ord.id);
     if (!res) {
       setMsg({ tipo: 'err', texto: 'No se pudo marcar el retiro. Revisa la conexión e intenta de nuevo.' });
       setTrabajando(null);
       return;
     }
-    setSealed(p => ({ ...p, [fid]: { ...p[fid], retired: true, retired_at: res.retired_at || new Date().toISOString() } }));
+    setSealed(p => ({ ...p, [fam.id]: { ...p[fam.id], retired: true, retired_at: res.retired_at || new Date().toISOString() } }));
+    if (descontados) {
+      setMsg({ tipo: 'ok', texto: 'Retiro de ' + fam.name + ' marcado. Se descontaron ' + descontados + ' producto' + (descontados === 1 ? '' : 's') + ' que el proveedor no trajo.' });
+    }
     setTrabajando(null);
   };
 
@@ -329,31 +369,13 @@ export function AdminRetiros({ families, sealed, cargos, setSealed, period, prod
     setTrabajando(null);
   };
 
-  // Aplicar desde la propia fila los faltantes que el proveedor ya avisó. Es el
-  // paso que faltaba: sin esto, bloquear el retiro sería un callejón sin salida
-  // y la comisión tendría que cambiar de pestaña con la familia en la puerta.
-  const aplicarFaltantes = async (fam) => {
-    const pend = (porFamilia.get(fam.id) || {}).noTrae || [];
-    if (!pend.length) return;
-    setTrabajando(fam.id); setMsg(null);
-    const res = await addAdjustmentsBulk(pend);
-    if (res && res.error) { setMsg({ tipo: 'err', texto: res.error }); setTrabajando(null); return; }
-    const frescos = await getAdjustments(period.id);
-    setAjustes(frescos || []);
-    setMsg({
-      tipo: 'ok',
-      texto: 'Se descontaron ' + pend.length + ' producto' + (pend.length === 1 ? '' : 's') +
-        ' del pedido de ' + fam.name + '. Ya puedes marcar el retiro.',
-    });
-    setTrabajando(null);
-  };
-
   if (cargando) return <p style={{ color: '#888', fontSize: '13px' }}>Cargando retiros...</p>;
 
-  // Cuántas familias no se pueden entregar todavía. Va arriba porque es la
-  // pregunta que la comisión se hace antes de abrir la bodega, no una por una.
+  // Cuántas familias tienen descuentos del proveedor que se van a aplicar al
+  // marcar su retiro. No bloquea nada: es para que la comisión sepa que esas
+  // cajas van con productos de menos.
   const bloqueadas = families.filter(f => sealed[f.id] && !sealed[f.id].retired &&
-    puedeMarcarRetiro(porFamilia.get(f.id)).puede === false).length;
+    ((porFamilia.get(f.id) || {}).noTrae || []).length > 0).length;
 
   return (
     <div>
@@ -361,7 +383,7 @@ export function AdminRetiros({ families, sealed, cargos, setSealed, period, prod
         {[
           { l: 'Retirados', v: ret, c: '#2e7d32', bg: '#e8f5e9' },
           { l: 'Pendientes', v: sc - ret, c: '#e65100', bg: '#fff3e0' },
-          { l: 'Con descuentos sin aplicar', v: bloqueadas, c: bloqueadas ? '#c62828' : '#888', bg: bloqueadas ? '#ffebee' : '#f5f5f5' },
+          { l: 'Con productos que no llegaron', v: bloqueadas, c: bloqueadas ? '#e65100' : '#888', bg: bloqueadas ? '#fff3e0' : '#f5f5f5' },
           { l: 'Sin sellar', v: families.length - sc, c: '#888', bg: '#f5f5f5' },
         ].map(m => (
           <div key={m.l} style={{ padding: '0.9rem', background: m.bg, borderRadius: '8px', textAlign: 'center' }}>
@@ -379,15 +401,13 @@ export function AdminRetiros({ families, sealed, cargos, setSealed, period, prod
         </div>
       )}
 
-      {bloqueadas > 0 && (
-        <div style={{ background: '#fff8e1', border: '1px solid #ffc107', borderRadius: '8px', padding: '11px 14px', marginBottom: '1rem' }}>
-          <p style={{ fontSize: '12px', color: '#e65100', margin: 0, lineHeight: 1.6 }}>
-            <strong>{bloqueadas} familia{bloqueadas === 1 ? '' : 's'}</strong> no se puede{bloqueadas === 1 ? '' : 'n'} marcar como retirada{bloqueadas === 1 ? '' : 's'} todavía:
-            el proveedor avisó que no trae productos de su pedido y el descuento no se aplicó.
-            Si marcas el retiro antes, se le cobra algo que nunca llegó. Cada fila tiene el botón para descontarlo.
-          </p>
-        </div>
-      )}
+      <div style={{ background: '#f1f8f1', border: '1px solid #c8e6c9', borderRadius: '8px', padding: '10px 14px', marginBottom: '1rem' }}>
+        <p style={{ fontSize: '12px', color: '#2e7d32', margin: 0, lineHeight: 1.6 }}>
+          🤝 <strong>El retiro no depende del pago.</strong> Toda familia con pedido puede retirar su caja;
+          lo que deba queda en su saldo y se arregla con Balance Contable.
+          {bloqueadas > 0 && <> {bloqueadas} caja{bloqueadas === 1 ? '' : 's'} va{bloqueadas === 1 ? '' : 'n'} con productos que el proveedor no trajo: se descuentan solos al marcar el retiro.</>}
+        </p>
+      </div>
 
       {families.map(f => {
         const o = sealed[f.id];
@@ -399,46 +419,50 @@ export function AdminRetiros({ families, sealed, cargos, setSealed, period, prod
         const cargoFam = cargos.de(f.id);
         const exentaDe = cargos.exencionesDe(f.id);
         const ocupada = trabajando === f.id;
+        // Lo que debe, a título informativo. Se descuenta ya lo que el proveedor
+        // no trae aunque todavía no se haya aplicado: es lo que va a deber.
+        const pendienteDescuento = (pend.noTrae || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+        const cuentaFam = cuentaDeFamilia({ ord: o, ajustes: ajustesDe.get(f.id) || [], cargo: cargoFam, saldo: f.balance || 0 });
+        const aPagarInfo = Math.max(0, cuentaFam.aPagar + pendienteDescuento);
 
-        const borde = o.retired ? '#c8e6c9' : !permiso.puede ? '#ffab91' : permiso.advertencia ? '#ffe082' : '#dde8dd';
+        const borde = o.retired ? '#c8e6c9' : permiso.advertencia ? '#ffe082' : '#dde8dd';
 
         return (
           <div key={f.id} style={{ background: 'white', border: `1px solid ${borde}`, borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
             <div onClick={() => setExpandedFam(isExp ? null : f.id)}
               style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', gap: '10px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: o.retired ? '#4CAF50' : !permiso.puede ? '#e64a19' : '#ff9800', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: o.retired ? '#4CAF50' : '#ff9800', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, flexShrink: 0 }}>{f.initials}</div>
                 <div style={{ minWidth: 0 }}>
                   <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{f.name}</p>
                   <p style={{ fontSize: '11px', color: '#888', margin: '2px 0 0' }}>
                     {o.retired
                       ? `Retirado ${new Date(o.retired_at).toLocaleDateString('es-CL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
                       : `Total: $${(o.total + cargoFam).toLocaleString('es-CL')}`}
+                    {/* Informativo: lo que debe no condiciona el retiro. */}
+                    <span style={{ color: aPagarInfo > 0 ? '#e65100' : '#2e7d32' }}>
+                      {' · '}{aPagarInfo > 0 ? 'por pagar ' + clp(aPagarInfo) : 'nada por pagar'}
+                    </span>
                   </p>
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                {!o.retired && !permiso.puede && (
-                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: '#ffebee', color: '#c62828' }}>
-                    📭 {permiso.noTrae.length} sin descontar
+                {!o.retired && permiso.noTrae.length > 0 && (
+                  <span title={permiso.texto} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: '#fff3e0', color: '#e65100' }}>
+                    📭 {permiso.noTrae.length} no llegó{permiso.noTrae.length === 1 ? '' : '(n)'}
                   </span>
                 )}
-                {!o.retired && permiso.puede && permiso.advertencia && (
+                {!o.retired && permiso.parcial.length > 0 && (
                   <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: '#fff3e0', color: '#e65100' }}>
                     ⚖ {permiso.parcial.length} parcial{permiso.parcial.length === 1 ? '' : 'es'}
                   </span>
                 )}
                 {!o.retired && (
-                  permiso.puede
-                    ? <button onClick={e => { e.stopPropagation(); markRet(f.id, o.id); }} disabled={ocupada}
-                        style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: ocupada ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 600 }}>
-                        {ocupada ? '...' : '✓ Marcar retirado'}
-                      </button>
-                    : <button onClick={e => { e.stopPropagation(); aplicarFaltantes(f); }} disabled={ocupada}
-                        title={permiso.texto}
-                        style={{ padding: '5px 12px', background: '#e65100', color: 'white', border: 'none', borderRadius: '6px', cursor: ocupada ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 700 }}>
-                        {ocupada ? 'Aplicando...' : '📭 Descontar y habilitar'}
-                      </button>
+                  <button onClick={e => { e.stopPropagation(); markRet(f, o); }} disabled={ocupada}
+                    title={permiso.texto || ''}
+                    style={{ padding: '5px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '6px', cursor: ocupada ? 'wait' : 'pointer', fontSize: '11px', fontWeight: 600 }}>
+                    {ocupada ? '...' : '✓ Marcar retirado'}
+                  </button>
                 )}
                 {o.retired && (
                   <>
@@ -456,21 +480,25 @@ export function AdminRetiros({ families, sealed, cargos, setSealed, period, prod
 
             {/* Lo que el proveedor avisó, a la vista sin tener que expandir: es
                 la razón por la que el botón de retiro no está disponible. */}
-            {!o.retired && !permiso.puede && (
-              <div style={{ borderTop: '1px solid #ffe0d6', background: '#fff5f2', padding: '9px 1rem' }}>
-                <p style={{ fontSize: '11px', color: '#c62828', margin: '0 0 5px', fontWeight: 600 }}>{permiso.texto}</p>
+            {!o.retired && permiso.noTrae.length > 0 && (
+              <div style={{ borderTop: '1px solid #ffe0d6', background: '#fff8f5', padding: '9px 1rem' }}>
+                <p style={{ fontSize: '11px', color: '#e65100', margin: '0 0 5px', fontWeight: 600 }}>
+                  No viene en la caja — se descuenta al marcar el retiro:
+                </p>
                 {permiso.noTrae.map((p, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#666', padding: '2px 0' }}>
                     <span>{p.product_name} <span style={{ color: '#aaa' }}>×{p.qty}</span></span>
-                    <span style={{ fontWeight: 600, color: '#c62828' }}>− ${Math.abs(p.amount).toLocaleString('es-CL')}</span>
+                    <span style={{ fontWeight: 600, color: '#2e7d32' }}>− ${Math.abs(p.amount).toLocaleString('es-CL')}</span>
                   </div>
                 ))}
               </div>
             )}
 
-            {!o.retired && permiso.puede && permiso.advertencia && (
+            {!o.retired && permiso.parcial.length > 0 && (
               <div style={{ borderTop: '1px solid #ffe082', background: '#fffdf5', padding: '9px 1rem' }}>
-                <p style={{ fontSize: '11px', color: '#e65100', margin: '0 0 5px', fontWeight: 600 }}>{permiso.texto}</p>
+                <p style={{ fontSize: '11px', color: '#e65100', margin: '0 0 5px', fontWeight: 600 }}>
+                  El proveedor trae solo una parte. Quién se queda sin su parte lo decide la cooperativa: regístralo en Faltantes y Extras.
+                </p>
                 {permiso.parcial.map((p, i) => (
                   <div key={i} style={{ fontSize: '11px', color: '#666', padding: '2px 0' }}>
                     {p.product_name} — pidió {p.suQty}; del total de {p.pedido} llegan {p.llegan}
@@ -582,15 +610,22 @@ export function AdminFlujoCaja({ period, cargos, recargarCargos, families, setFa
     if (result) {
       setEntries(p => [result, ...p]);
 
-      // Si hay familia asignada, actualizar su saldo inmediatamente
+      // Si hay familia asignada, se mueve su saldo. Se SUMA en la base, no se
+      // sobrescribe con «saldo en pantalla + monto»: la pantalla podía estar
+      // vieja (después de cerrar un período seguía con el saldo de antes del
+      // cobro) y el pago borraba el cobro entero.
       if (form.family_id && selectedFam) {
-        const delta = form.type === 'ingreso' ? parseInt(form.amount) : -(parseInt(form.amount));
-        const nuevoSaldo = (selectedFam.balance || 0) + delta;
-        await updateFamilyBalance(form.family_id, nuevoSaldo);
+        const delta = form.type === 'ingreso' ? parseInt(form.amount, 10) : -(parseInt(form.amount, 10));
+        const nuevoSaldo = await moverSaldo(form.family_id, delta);
+        if (nuevoSaldo && nuevoSaldo.error) {
+          setErr('El movimiento quedó registrado, pero el saldo de ' + selectedFam.name + ' no se actualizó: ' + nuevoSaldo.error + '. Corrígelo en Saldos.');
+          setSaving(false);
+          return;
+        }
         if (setFamilies) {
           setFamilies(p => p.map(f => f.id === form.family_id ? { ...f, balance: nuevoSaldo } : f));
         }
-        setSuccessMsg(`Saldo de ${selectedFam.name} actualizado a $${nuevoSaldo.toLocaleString('es-CL')}`);
+        setSuccessMsg(`Saldo de ${selectedFam.name} actualizado a ${clp(nuevoSaldo)}`);
         setTimeout(() => setSuccessMsg(''), 4000);
       }
 
@@ -609,15 +644,24 @@ export function AdminFlujoCaja({ period, cargos, recargarCargos, families, setFa
       const fam = fams.find(f => f.id === entry.family_id);
       const who = entry.family_name || (fam && fam.name) || 'la familia';
       if (!window.confirm(`Este movimiento afectó el saldo de ${who}. Al eliminarlo se revertirá ese ajuste. ¿Continuar?`)) return;
-      if (fam) {
-        const reverse = entry.type === 'ingreso' ? -(entry.amount || 0) : (entry.amount || 0);
-        const nuevoSaldo = (fam.balance || 0) + reverse;
-        await updateFamilyBalance(entry.family_id, nuevoSaldo);
-        if (setFamilies) setFamilies(p => p.map(f => f.id === entry.family_id ? { ...f, balance: nuevoSaldo } : f));
-      }
+    } else if (!window.confirm('¿Eliminar este movimiento del flujo de caja?')) {
+      return;
     }
-    await deleteCashFlowEntry(id);
+    // Primero se borra el movimiento y recién después se revierte el saldo. Al
+    // revés, si el borrado fallaba, el saldo quedaba revertido y el pago seguía
+    // en la lista: al reintentar se revertía dos veces.
+    const ok = await deleteCashFlowEntry(id);
+    if (!ok) { setErr('No se pudo eliminar el movimiento. Revisa la conexión e intenta de nuevo.'); return; }
     setEntries(p => p.filter(e => e.id !== id));
+    if (entry && entry.family_id) {
+      const reverse = entry.type === 'ingreso' ? -(entry.amount || 0) : (entry.amount || 0);
+      const nuevoSaldo = await moverSaldo(entry.family_id, reverse);
+      if (nuevoSaldo && nuevoSaldo.error) {
+        setErr('Se eliminó el movimiento, pero el saldo no se revirtió: ' + nuevoSaldo.error + '. Corrígelo en Saldos.');
+        return;
+      }
+      if (setFamilies) setFamilies(p => p.map(f => f.id === entry.family_id ? { ...f, balance: nuevoSaldo } : f));
+    }
   };
 
   if (!period) return (
@@ -966,7 +1010,15 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
   // Quien tenga alguna comisión aparece arriba; el resto en la lista de familias.
   const admins = families.filter(f => esDelPanel(f));
   const fams = families.filter(f => !esDelPanel(f));
-  const filtered = fams.filter(f => !srch || f.name.toLowerCase().includes(srch.toLowerCase()));
+
+  // El buscador filtra LAS DOS listas. Antes solo filtraba la de abajo: si se
+  // buscaba a alguien con comisión —Fabián, Ruby, Paty— la lista de arriba
+  // seguía completa y la de abajo quedaba vacía, así que parecía no funcionar.
+  // Busca sin tildes, por nombre, correo o comisión («contable», «retiro»).
+  const textoFamilia = f => [f.name, f.email, f.email2, ...etiquetasDe(f).map(e => e.label + ' ' + e.corto)].filter(Boolean).join(' ');
+  const coincideFam = f => coincide(textoFamilia(f), srch);
+  const filtered = fams.filter(coincideFam);
+  const adminsVis = admins.filter(coincideFam);
 
   // Los correos no son credenciales de acceso (se entra con nombre + PIN);
   // son las direcciones de notificación de la familia. La cooperativa pidió dos.
@@ -1085,8 +1137,11 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
         );
       })()}
 
-      <input type="text" placeholder="Buscar familia por nombre..." value={srch} onChange={e => setSrch(e.target.value)}
+      <input type="text" placeholder="Buscar por nombre, correo o comisión..." value={srch} onChange={e => setSrch(e.target.value)}
         style={{ width: '100%', padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box', marginBottom: '1rem' }} />
+      {srch.trim() && adminsVis.length === 0 && filtered.length === 0 && (
+        <p style={{ fontSize: '12px', color: '#999', textAlign: 'center', margin: '0 0 1rem' }}>Nadie coincide con «{srch.trim()}».</p>
+      )}
 
       {showForm && (
         <div style={{ padding: '1rem', background: 'white', border: '1px solid #c8e6c9', borderRadius: '8px', marginBottom: '1rem' }}>
@@ -1119,10 +1174,12 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
         </div>
       )}
 
-      {admins.length > 0 && (
+      {adminsVis.length > 0 && (
         <div style={{ marginBottom: '1.25rem' }}>
-          <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>Con comisión asignada</p>
-          {admins.map(f => (
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#1565c0', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>
+            Con comisión asignada{srch.trim() ? ` (${adminsVis.length} de ${admins.length})` : ''}
+          </p>
+          {adminsVis.map(f => (
             <div key={f.id} style={{ background: 'white', border: '1.5px solid #90caf9', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
               <div style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
@@ -1137,6 +1194,14 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                       {e.ic} {e.corto}
                     </span>
                   ))}
+                  {/* También piden y tienen saldo: son socias como las demás. */}
+                  {sealed[f.id]
+                    ? <span style={{ fontSize: '10px', fontWeight: 600, padding: '3px 7px', borderRadius: '6px', background: sealed[f.id].retired ? '#e8f5e9' : '#e3f2fd', color: sealed[f.id].retired ? '#2e7d32' : '#1565c0' }}>{sealed[f.id].retired ? '✓ Entregado' : '✓ Sellado'}</span>
+                    : <button onClick={() => onHacerPedido(f)}
+                        style={{ fontSize: '10px', padding: '4px 10px', background: '#1565c0', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
+                        Hacer pedido
+                      </button>}
+                  {(f.balance || 0) !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : '−'}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
                 </div>
               </div>
               {renderRolesRow(f)}
@@ -1147,7 +1212,9 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
         </div>
       )}
 
-      <p style={{ fontSize: '11px', fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>Familias ({fams.length})</p>
+      <p style={{ fontSize: '11px', fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: '0.08em', margin: '0 0 8px' }}>
+        Familias ({srch.trim() ? `${filtered.length} de ${fams.length}` : fams.length})
+      </p>
       {filtered.map(f => (
         <div key={f.id} style={{ background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '8px', overflow: 'hidden' }}>
           <div style={{ padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1167,7 +1234,7 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
                   </button>
                 )
               }
-              {f.balance !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : ''}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
+              {(f.balance || 0) !== 0 && <p style={{ fontSize: '11px', margin: 0, color: f.balance > 0 ? '#2e7d32' : '#c62828', fontWeight: 600 }}>{f.balance > 0 ? '+' : '−'}${Math.abs(f.balance).toLocaleString('es-CL')}</p>}
 
             </div>
           </div>
@@ -1182,10 +1249,10 @@ export function AdminFamilias({ families, setFamilies, sealed, onHacerPedido, cu
 
 // ─── PRODUCTOS ────────────────────────────────────────────────────────────────
 
-export function AdminProductos({ products, setProducts, providers = [] }) {
+export function AdminProductos({ products, setProducts, providers = [], enBodega = null }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ name: '', category: 'Cereales', price: '', unit: '', provider_id: '', in_stock: true });
+  const [form, setForm] = useState({ name: '', category: 'Cereales', price: '', unit: '', description: '', provider_id: '', in_stock: true });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [srch, setSrch] = useState('');
@@ -1205,10 +1272,23 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
     .filter(p => p.active || p.id === form.provider_id)
     .filter(p => !provSearch || p.name.toLowerCase().includes(provSearch.toLowerCase().trim()));
 
+  // Mismo nombre, mismo proveedor, es casi siempre un doble clic al cargar
+  // rápido: se avisa ANTES de llegar a la base, igual que la unicidad de los
+  // cargos fijos. Excluye el propio producto al editar.
+  const esDuplicado = () => {
+    const nombre = form.name.trim().toLowerCase();
+    return products.some(p =>
+      p.id !== editId &&
+      p.provider_id === form.provider_id &&
+      (p.name || '').trim().toLowerCase() === nombre
+    );
+  };
+
   const validate = () => {
     if (!form.name.trim() || !form.price || !form.unit) return 'Nombre, precio y unidad son obligatorios';
     if (!form.provider_id) return 'Selecciona un proveedor';
     if (!providerFields()) return 'El proveedor seleccionado ya no existe';
+    if (esDuplicado()) return 'Ya existe un producto con ese nombre de este proveedor.';
     return '';
   };
 
@@ -1216,13 +1296,13 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
     const v = validate();
     if (v) { setErr(v); return; }
     setLoading(true);
-    const newProduct = { id: Math.max(...products.map(p => p.id), 0) + 1, name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), in_stock: form.in_stock, ...providerFields() };
+    const newProduct = { id: Math.max(...products.map(p => p.id), 0) + 1, name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), description: form.description.trim() || null, in_stock: form.in_stock, ...providerFields() };
     const result = await addProduct(newProduct);
-    if (result) {
+    if (result && !result.error) {
       setProducts(p => [...p, newProduct]);
-      setForm({ name: '', category: 'Cereales', price: '', unit: '', provider_id: '', in_stock: true });
+      setForm({ name: '', category: 'Cereales', price: '', unit: '', description: '', provider_id: '', in_stock: true });
       setErr(''); setShowForm(false);
-    } else { setErr('Error al agregar producto'); }
+    } else { setErr((result && result.error) || 'Error al agregar producto'); }
     setLoading(false);
   };
 
@@ -1230,19 +1310,19 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
     const v = validate();
     if (v) { setErr(v); return; }
     setLoading(true);
-    const updates = { name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), in_stock: form.in_stock, ...providerFields() };
+    const updates = { name: form.name.trim(), category: form.category, price: parseInt(form.price), unit: form.unit.trim(), description: form.description.trim() || null, in_stock: form.in_stock, ...providerFields() };
     const result = await updateProduct(editId, updates);
-    if (result) {
+    if (result && !result.error) {
       setProducts(p => p.map(x => x.id === editId ? { ...x, ...updates } : x));
       setEditId(null); setErr('');
-    } else { setErr('Error al actualizar producto'); }
+    } else { setErr((result && result.error) || 'Error al actualizar producto'); }
     setLoading(false);
   };
 
   const toggleStock = async (id) => {
     const pr = products.find(p => p.id === id);
     const result = await updateProduct(id, { in_stock: !pr.in_stock });
-    if (result) setProducts(p => p.map(x => x.id === id ? { ...x, in_stock: !x.in_stock } : x));
+    if (result && !result.error) setProducts(p => p.map(x => x.id === id ? { ...x, in_stock: !x.in_stock } : x));
   };
 
   const startEdit = (pr) => {
@@ -1250,12 +1330,21 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
     // Productos anteriores a la tabla de proveedores pueden no tener provider_id:
     // se resuelve por nombre para que el desplegable no aparezca vacío.
     const byName = providers.find(p => p.name.toLowerCase() === (pr.provider || '').trim().toLowerCase());
-    setForm({ name: pr.name, category: pr.category, price: pr.price, unit: pr.unit, provider_id: pr.provider_id || (byName ? byName.id : ''), in_stock: pr.in_stock });
+    setForm({ name: pr.name, category: pr.category, price: pr.price, unit: pr.unit, description: pr.description || '', provider_id: pr.provider_id || (byName ? byName.id : ''), in_stock: pr.in_stock });
     setShowForm(false);
     setErr('');
   };
 
-  const vis = products.filter(p => !srch || p.name.toLowerCase().includes(srch.toLowerCase()));
+  const handleDelete = async (pr) => {
+    if (!window.confirm('¿Eliminar "' + pr.name + '" del maestro de productos?\n\nLos pedidos ya sellados que lo incluían conservan su propia copia y no cambian; solo deja de poder pedirse de nuevo.')) return;
+    const result = await deleteProduct(pr.id);
+    if (result === true) setProducts(p => p.filter(x => x.id !== pr.id));
+    else setErr((result && result.error) || 'Error al eliminar el producto');
+  };
+
+  // Por nombre, proveedor o categoría, sin tildes: «granero» lista todo lo de
+  // El Granero, que es como se trabaja al actualizar precios de un proveedor.
+  const vis = products.filter(p => coincide(textoDeProducto(p), srch));
 
   return (
     <div>
@@ -1334,6 +1423,12 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
               <input type="checkbox" id="stock" checked={form.in_stock} onChange={e => setForm(p => ({ ...p, in_stock: e.target.checked }))} />
               <label htmlFor="stock" style={{ fontSize: '13px', cursor: 'pointer', margin: 0 }}>Con stock</label>
             </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Descripción (opcional, la ve la familia al elegir el producto)</label>
+              <input type="text" placeholder="Gramaje, marca, variedad u otro detalle..." value={form.description}
+                onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
+                style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', boxSizing: 'border-box' }} />
+            </div>
           </div>
           {err && <p style={{ fontSize: '12px', color: '#c62828', margin: '0 0 10px' }}>{err}</p>}
           <div style={{ display: 'flex', gap: '8px' }}>
@@ -1344,18 +1439,24 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
       )}
 
       <div style={{ marginBottom: '1rem' }}>
-        <input type="text" placeholder="Buscar..." value={srch} onChange={e => setSrch(e.target.value)} style={{ width: '100%', padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }} />
+        <input type="text" placeholder="Buscar por producto, proveedor o categoría..." value={srch} onChange={e => setSrch(e.target.value)} style={{ width: '100%', padding: '7px 12px', border: '1px solid #dde8dd', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }} />
+        {srch.trim() && <p style={{ fontSize: '11px', color: '#999', margin: '4px 0 0' }}>{vis.length} de {products.length} productos</p>}
       </div>
 
       {vis.map(pr => (
         <div key={pr.id} style={{ padding: '0.8rem 1rem', background: 'white', border: '1px solid #dde8dd', borderRadius: '8px', marginBottom: '7px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>{pr.name}</p>
+            <p style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>
+              {pr.name}
+              {enBodega && enBodega.get(pr.id) && <BadgeBodega info={enBodega.get(pr.id)} />}
+            </p>
             <p style={{ fontSize: '11px', color: '#888', margin: '3px 0 0' }}>{pr.category} · {pr.provider} · {pr.unit} · ${pr.price.toLocaleString('es-CL')}</p>
+            {pr.description && <p style={{ fontSize: '11px', color: '#aaa', margin: '3px 0 0', fontStyle: 'italic' }}>{pr.description}</p>}
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button onClick={() => toggleStock(pr.id)} style={{ fontSize: '10px', fontWeight: 600, padding: '3px 8px', borderRadius: '5px', border: '1px solid', cursor: 'pointer', background: pr.in_stock ? '#e8f5e9' : '#f5f5f5', borderColor: pr.in_stock ? '#81c784' : '#dde8dd', color: pr.in_stock ? '#2e7d32' : '#999' }}>{pr.in_stock ? '✓ Stock' : 'Sin stock'}</button>
             <button onClick={() => startEdit(pr)} style={{ fontSize: '10px', padding: '3px 8px', border: '1px solid #dde8dd', background: 'white', borderRadius: '5px', cursor: 'pointer', color: '#555' }}>Editar</button>
+            <button onClick={() => handleDelete(pr)} style={{ width: '22px', height: '22px', border: '1px solid #ffcdd2', background: '#fff5f5', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', color: '#c62828' }}>✕</button>
           </div>
         </div>
       ))}
@@ -1365,7 +1466,7 @@ export function AdminProductos({ products, setProducts, providers = [] }) {
 
 // ─── PERÍODO ──────────────────────────────────────────────────────────────────
 
-export function AdminPeriodo({ period, setPeriod, families, sealed, cargos, recargarCargos, currentAdmin }) {
+export function AdminPeriodo({ period, setPeriod, families, setFamilies, sealed, cargos, recargarCargos, recargarPedidos, currentAdmin }) {
   const [dates, setDates] = useState({ date_from: period?.date_from || '', date_to: period?.date_to || '', date_delivery: period?.date_delivery || '', date_confirm_until: period?.date_confirm_until || '', date_adjust_until: period?.date_adjust_until || '' });
   const [loading, setLoading] = useState(false);
   const [dateErr, setDateErr] = useState('');
@@ -1535,10 +1636,24 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargos, reca
     if (res && res._faltaMigracion) {
       setDateErr('Falta correr la migración 006 en Supabase: sin ella no se puede cerrar la ventana de pedidos a mano. Por ahora los pedidos se cierran solos al pasar la fecha de cierre.');
     } else {
+      // Al cerrar, lo que quedó en carritos sin sellar se sella en el acto
+      // (migración 013): es lo que la cooperativa pidió que pase al llegar el
+      // cierre, y el consolidado que se le manda al proveedor tiene que incluirlo.
+      let autoSellados = 0;
+      if (cerrar) {
+        const n = await sellarBorradores(period.id);
+        autoSellados = n || 0;
+        if (recargarPedidos) await recargarPedidos();
+      }
       setPeriod(p => ({ ...p, orders_closed_at: valor }));
       logAction(cerrar ? 'orders_closed' : 'orders_reopened',
-        (cerrar ? 'Pedidos cerrados' : 'Pedidos reabiertos') + ' en período: ' + period.label);
+        (cerrar ? 'Pedidos cerrados' : 'Pedidos reabiertos') + ' en período: ' + period.label +
+        (autoSellados ? ' — se sellaron automáticamente ' + autoSellados + ' carrito(s) pendiente(s)' : ''));
       setDateErr('');
+      if (autoSellados) {
+        alert('Se sellaron automáticamente ' + autoSellados + ' pedido' + (autoSellados === 1 ? '' : 's') +
+          ' que habían quedado en el carrito sin sellar. Aparecen en Pedidos como «sellado automático».');
+      }
     }
     setCerrandoPedidos(false);
   };
@@ -1547,11 +1662,61 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargos, reca
     if (!newLabel.trim()) { setCloseMsg('Ingresa un nombre para el nuevo período'); return; }
     setClosing(true);
 
-    const totalValue = Object.values(sealed).reduce((s, o) => s + o.total + cargos.de(o.family_id), 0);
+    const abortar = (texto) => { setCloseMsg(texto); setClosing(false); };
+
+    // ── 1 · La ventana de pedidos se cierra primero ───────────────────────────
+    // Si el período se cierra con los pedidos todavía abiertos, los carritos sin
+    // sellar quedarían en un período inactivo que ya nadie sella (ni el cron).
+    if (!period.orders_closed_at) {
+      const valor = new Date().toISOString();
+      const r = await updatePeriod(period.id, { orders_closed_at: valor });
+      if (r && !r._faltaMigracion) setPeriod(p => ({ ...p, orders_closed_at: valor }));
+    }
+    // Un carrito que quedó sin sellar también se cobra: se sella antes.
+    await sellarBorradores(period.id);
+
+    // ── 2 · Todo se lee FRESCO de la base ─────────────────────────────────────
+    // No del estado de la pantalla: la pantalla no se enteraba de `charged_at`
+    // después de cobrar, así que un reintento tras una falla parcial volvía a
+    // cobrar. Y un error de lectura NO puede confundirse con «nadie pidió»: eso
+    // cerraría el período sin cobrarle a nadie.
+    const [pedidosFrescos, ocs] = await Promise.all([getSealedOrdersOrNull(period.id), getPurchaseOrders(period.id)]);
+    if (pedidosFrescos === null) {
+      return abortar('No se pudieron leer los pedidos del período. No se cobró ni se cerró nada. Revisa la conexión y reintenta.');
+    }
+    const enPantalla = Object.keys(sealed).length;
+    const pedidoDe = new Map();
+    pedidosFrescos.forEach(o => pedidoDe.set(o.family_id, o));   // el más reciente pisa
+    if (pedidoDe.size < enPantalla) {
+      return abortar('La base devolvió ' + pedidoDe.size + ' pedidos y en pantalla hay ' + enPantalla + '. Por seguridad no se cobró nada: recarga la página y vuelve a intentarlo.');
+    }
+
+    // ── 3 · Lo que el proveedor no trajo se descuenta antes de cobrar ─────────
+    // Antes solo se aplicaba en Retiros, al marcar la entrega. Una familia que
+    // no retiró, o cuyo retiro se marcó antes de que el proveedor respondiera,
+    // terminaba pagando algo que nunca llegó. El índice único de la 004 hace que
+    // repetir esto no duplique nada.
+    let ajustes = await getAdjustments(period.id);
+    if (ajustes === null) {
+      return abortar('No se pudieron leer los faltantes y extras del período. Sin ellos el cobro saldría mal: no se cerró nada. Revisa la conexión y reintenta.');
+    }
+    const { pendientes } = pendientesDeConfirmacion({ ordenes: ocs || [], sealedOrders: pedidosFrescos, period, ajustes });
+    if (pendientes.length) {
+      const r = await addAdjustmentsBulk(pendientes);
+      if (r && r.error) return abortar('No se pudieron aplicar los descuentos de lo que los proveedores no trajeron (' + r.error + '). No se cobró nada.');
+      ajustes = await getAdjustments(period.id);
+      if (ajustes === null) return abortar('No se pudieron volver a leer los ajustes. No se cobró nada; reintenta.');
+    }
+    const porFam = ajustesPorFamilia(ajustes);
+
+    // El resumen se arma con lo que de verdad se cobra: incluye los pedidos que
+    // se acaban de sellar solos y los descuentos recién aplicados.
+    const totalValue = Array.from(pedidoDe.values()).reduce((s, o) =>
+      s + cuentaDeFamilia({ ord: o, ajustes: porFam.get(o.family_id) || [], cargo: cargos.de(o.family_id), saldo: 0 }).cargoAlCerrar, 0);
     const summary = {
       period_label: period.label,
       families_count: na.length,
-      sealed_count: sc,
+      sealed_count: pedidoDe.size,
       total_value: totalValue,
       cargo: cargos.total,
       // Los cargos del período quedan escritos en el resumen del cierre. El
@@ -1571,37 +1736,67 @@ export function AdminPeriodo({ period, setPeriod, families, sealed, cargos, reca
         };
       }),
       families: na.map(f => {
-        const ord = sealed[f.id];
+        const ord = pedidoDe.get(f.id);
         return {
           name: f.name,
           balance_before: f.balance || 0,
           had_order: !!ord,
-          order_total: ord ? ord.total + cargos.de(f.id) : 0
+          sealed_auto: !!(ord && ord.sealed_auto),
+          order_total: ord
+            ? cuentaDeFamilia({ ord, ajustes: porFam.get(f.id) || [], cargo: cargos.de(f.id), saldo: 0 }).cargoAlCerrar
+            : 0,
         };
       })
     };
 
-    // El cobro va ANTES de cerrar y no se puede deshacer, así que cada pedido se
-    // marca como cobrado en cuanto se aplica. Si esto falla a la mitad y el admin
-    // reintenta, los ya cobrados se saltan en vez de cobrarse dos veces.
-    const ajustes = await getAdjustments(period.id);
-    const porFam = ajustesPorFamilia(ajustes);
+    // ── 4 · Cobrar ────────────────────────────────────────────────────────────
+    // Cada pedido se cobra y se marca como cobrado en la misma operación
+    // (`coop_cobrar_pedido`), así que un reintento salta los ya cobrados.
     const fallidas = [];
 
+    // Extras que no quedan dentro de un pedido cobrado: los de una familia sin
+    // pedido (una parte de un producto repartido), o los que se registraron
+    // DESPUÉS de que su pedido se cobró en un intento anterior. No hay pedido
+    // donde anotar «ya cobrado», así que se marcan como pagados ANTES de mover
+    // el saldo: si algo falla a la mitad, un reintento no los vuelve a cobrar, y
+    // el mensaje dice a quién corregir.
+    const cobrarExtrasSueltos = async (f, extras) => {
+      const total = extras.reduce((s, a) => s + Number(a.amount), 0);
+      if (!(total > 0)) return;
+      for (const a of extras) {
+        const r = await updateAdjustment(a.id, { paid: true, note: ((a.note ? a.note + ' · ' : '') + 'cobrado al saldo al cerrar ' + period.label) });
+        if (r && r.error) { fallidas.push(f.name + ' (extras)'); return; }
+      }
+      const r = await moverSaldo(f.id, -total);
+      if (r && r.error) fallidas.push(f.name + ' (extras marcados como cobrados, pero el saldo no bajó ' + clp(total) + ': corrígelo en Saldos)');
+    };
+
     for (const f of na) {
-      const ord = sealed[f.id];
-      if (!ord) continue;
-      if (ord.charged_at) continue; // ya cobrado en un intento anterior
+      const ord = pedidoDe.get(f.id);
+      const extrasLibres = (porFam.get(f.id) || []).filter(a => a.type === 'extra' && !a.paid && Number(a.amount) > 0);
+
+      if (!ord) { await cobrarExtrasSueltos(f, extrasLibres); continue; }
+
+      if (ord.charged_at) {
+        // Ya cobrado: solo quedan los extras que llegaron después.
+        const cobradoEl = new Date(ord.charged_at);
+        await cobrarExtrasSueltos(f, extrasLibres.filter(a => a.created_at && new Date(a.created_at) > cobradoEl));
+        continue;
+      }
 
       // `cargos.de(f.id)`, no el total: si esta familia está eximida de un cargo,
       // cobrárselo al cerrar anularía la exención justo en el momento en que
       // importa. Es el único lugar donde el cargo se convierte en plata.
-      const cuenta = cuentaDeFamilia({ ord, ajustes: porFam.get(f.id) || [], cargo: cargos.de(f.id), saldo: f.balance || 0 });
-      const nuevoSaldo = (f.balance || 0) - cuenta.cargoAlCerrar;
+      const cuenta = cuentaDeFamilia({ ord, ajustes: porFam.get(f.id) || [], cargo: cargos.de(f.id), saldo: 0 });
+      const res = await cobrarPedido(ord, cuenta.cargoAlCerrar);
+      if (res.error) { fallidas.push(f.name + ' (' + res.error + ')'); continue; }
+    }
 
-      const res = await updateFamilyBalance(f.id, nuevoSaldo);
-      if (!res) { fallidas.push(f.name); continue; }
-      await markOrderCharged(ord.id, cuenta.cargoAlCerrar);
+    // Los saldos que muestra el panel se recargan de la base: son los que
+    // quedaron después de cobrar, y el próximo pago se registra sobre ellos.
+    if (setFamilies) {
+      const frescas = await getFamilies();
+      if (frescas && frescas.length) setFamilies(frescas);
     }
 
     if (fallidas.length) {
@@ -2678,6 +2873,7 @@ export function AdminBodega({ period, families, setFamilies, products = [], curr
     setSaving(true);
     const item = {
       id: Date.now().toString(),
+      product_id: form.product_id || null,
       product_name: form.product_name,
       provider: form.provider,
       unit: form.unit || 'un',
@@ -2861,7 +3057,7 @@ export function AdminBodega({ period, families, setFamilies, products = [], curr
             </div>
             <div>
               <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Cantidad disponible *</label>
-              <input type="number" step="0.5" placeholder="0" value={form.quantity} onChange={e => setForm(p => ({ ...p, quantity: e.target.value }))}
+              <input type="number" step="any" placeholder="0" value={form.quantity} onChange={e => setForm(p => ({ ...p, quantity: e.target.value }))}
                 style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
             </div>
             <div style={{ gridColumn: 'span 2' }}>
@@ -3022,7 +3218,7 @@ export function AdminBodega({ period, families, setFamilies, products = [], curr
                         <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>
                           Cantidad ({item.unit}) · máx {remaining}
                         </label>
-                        <input type="number" step="0.5" min="0" max={remaining} placeholder="0" value={bajaForm.quantity}
+                        <input type="number" step="any" min="0" max={remaining} placeholder="0" value={bajaForm.quantity}
                           onChange={e => { setBajaForm(p => ({ ...p, quantity: e.target.value })); setBajaErr(''); }}
                           style={{ width: '100%', padding: '7px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px', boxSizing: 'border-box' }} />
                       </div>
@@ -3076,7 +3272,7 @@ export function AdminBodega({ period, families, setFamilies, products = [], curr
                       </div>
                       <div>
                         <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '3px' }}>Cantidad ({item.unit}) · máx {remaining}</label>
-                        <input type="number" step="0.5" max={remaining} placeholder="0" value={assignForm.quantity}
+                        <input type="number" step="any" max={remaining} placeholder="0" value={assignForm.quantity}
                           onChange={e => setAssignForm(p => ({ ...p, quantity: e.target.value }))}
                           style={{ width: '100%', padding: '6px', border: '1px solid #dde8dd', borderRadius: '6px', fontSize: '12px', boxSizing: 'border-box' }} />
                       </div>

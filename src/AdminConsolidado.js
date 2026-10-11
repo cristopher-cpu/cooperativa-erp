@@ -14,6 +14,70 @@ function parseItems(ord) {
   try { return Array.isArray(ord.items) ? ord.items : JSON.parse(ord.items); } catch { return []; }
 }
 
+export const enlaceConfirmacion = (orden) =>
+  window.location.origin + '/api/confirmar?token=' + encodeURIComponent(orden.token);
+
+// El pedido redactado como se le escribe a un proveedor por WhatsApp: producto,
+// formato y cantidad, sin categorías ni columnas de más. Es lo que Paty hacía a
+// mano copiando del consolidado.
+export function textoWhatsApp({ orden, proveedor, period }) {
+  const limite = period && period.date_confirm_until
+    ? new Date(period.date_confirm_until + 'T12:00:00').toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })
+    : null;
+  const lineas = (orden.lines || []).map(l => '• ' + l.qty + ' × ' + l.name + (l.unit ? ' (' + l.unit + ')' : ''));
+  return [
+    'Hola ' + (proveedor.contact || proveedor.name) + ', te escribimos de la Cooperativa Quilpueblo 🛒',
+    'Este es nuestro pedido' + (period && period.label ? ' de ' + period.label : '') + ':',
+    '',
+    ...lineas,
+    '',
+    'Total aprox.: ' + clp(orden.total),
+    '',
+    'Puedes confirmar qué tienes disponible acá, producto por producto (se abre directo, sin clave):',
+    enlaceConfirmacion(orden),
+    ...(limite ? ['', 'Te pedimos confirmar antes del ' + limite + '. ¡Gracias!'] : ['', '¡Gracias!']),
+  ].join('\n');
+}
+
+function copiar(texto) {
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(texto).then(() => true, () => false);
+  try {
+    const t = document.createElement('textarea');
+    t.value = texto; document.body.appendChild(t); t.select();
+    const ok = document.execCommand('copy'); document.body.removeChild(t);
+    return Promise.resolve(ok);
+  } catch { return Promise.resolve(false); }
+}
+
+function CompartirOrden({ orden, proveedor, period }) {
+  const [hecho, setHecho] = useState('');
+  const texto = textoWhatsApp({ orden, proveedor, period });
+  // wa.me es gratis y no necesita cuenta de empresa: abre WhatsApp con el texto
+  // escrito, y la persona solo aprieta enviar.
+  const fono = String(proveedor.phone || '').replace(/[^0-9]/g, '');
+  const fonoIntl = fono.length === 9 ? '56' + fono : fono;
+  const aviso = (t) => { setHecho(t); setTimeout(() => setHecho(''), 2500); };
+  const btn = { flex: 1, minWidth: '140px', padding: '8px', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '11px' };
+
+  return (
+    <div style={{ background: '#f1f8f1', border: '1px solid #c8e6c9', borderRadius: '8px', padding: '10px 12px', marginTop: '12px' }}>
+      <p style={{ fontSize: '11px', color: '#2e7d32', fontWeight: 700, margin: '0 0 6px' }}>📲 Enviar por WhatsApp</p>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <button onClick={() => copiar(texto).then(ok => aviso(ok ? 'Pedido copiado: pégalo en WhatsApp' : 'No se pudo copiar'))}
+          style={{ ...btn, background: 'white', color: '#2e7d32', border: '1px solid #a5d6a7' }}>📋 Copiar pedido con enlace</button>
+        <button onClick={() => copiar(enlaceConfirmacion(orden)).then(ok => aviso(ok ? 'Enlace copiado' : 'No se pudo copiar'))}
+          style={{ ...btn, background: 'white', color: '#2e7d32', border: '1px solid #a5d6a7' }}>🔗 Copiar solo el enlace</button>
+        {fonoIntl.length >= 11 && (
+          <a href={'https://wa.me/' + fonoIntl + '?text=' + encodeURIComponent(texto)} target="_blank" rel="noopener noreferrer"
+            style={{ ...btn, background: '#25D366', color: 'white', border: 'none', textAlign: 'center', textDecoration: 'none' }}>💬 Abrir WhatsApp de {proveedor.name}</a>
+        )}
+      </div>
+      {hecho && <p style={{ fontSize: '11px', color: '#2e7d32', margin: '6px 0 0', fontWeight: 600 }}>✓ {hecho}</p>}
+      {!fono && <p style={{ fontSize: '10px', color: '#999', margin: '6px 0 0' }}>Carga el teléfono del proveedor en Proveedores para abrir su WhatsApp directo.</p>}
+    </div>
+  );
+}
+
 export function AdminConsolidado({ families, sealed, products, providers, period, user }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -175,11 +239,16 @@ export function AdminConsolidado({ families, sealed, products, providers, period
       if (previa) await deletePurchaseOrder(previa.id);
       const data = await getPurchaseOrders(period.id);
       setOrders(data);
+      const copia = res.copiaA
+        ? ` Copia con el enlace de confirmación a ${res.copiaA}.`
+        : res.copiaError ? ` (La copia a la cooperativa no salió: ${res.copiaError}.)` : '';
       setMsg({
         tipo: 'ok',
-        texto: res.esPrueba
-          ? `Orden de ${pv.name} enviada en MODO PRUEBA a ${res.enviadoA} (no al proveedor real).`
-          : `Orden de ${pv.name} enviada a ${res.enviadoA}.`,
+        texto: res.sinCorreo
+          ? `${pv.name} no tiene correo: la orden quedó creada y la copia con el enlace llegó a ${res.copiaA}. Reenvíasela por WhatsApp (botones en su ficha).`
+          : res.esPrueba
+            ? `Orden de ${pv.name} enviada en MODO PRUEBA a ${res.enviadoA} (no al proveedor real).${copia}`
+            : `Orden de ${pv.name} enviada a ${res.enviadoA}.${copia}`,
       });
     }
     setSendingId(null);
@@ -195,7 +264,7 @@ export function AdminConsolidado({ families, sealed, products, providers, period
       proveedor: o.provider_name,
       nota: o.provider_note || '',
       lineas: (o.lines || []).map(l => {
-        const nada = l.available === false || Number(l.confirmed_qty) === 0;
+        const nada = l.available === false || (l.confirmed_qty != null && Number(l.confirmed_qty) === 0);
         const parcial = !nada && l.confirmed_qty != null && Number(l.confirmed_qty) < Number(l.qty);
         return {
           ...l,
@@ -324,6 +393,7 @@ export function AdminConsolidado({ families, sealed, products, providers, period
           <p style={{ fontSize: '11px', color: '#795548', margin: '4px 0 0', lineHeight: 1.5 }}>
             Las órdenes NO llegan a los proveedores: todas se desvían a <strong>{estado.destinoPruebas}</strong>.
             Para enviar de verdad, borra la variable <code>CORREO_PRUEBAS</code> en Vercel y vuelve a desplegar.
+            {estado.copiaCooperativa && <> Cada orden manda además una copia con el enlace de confirmación a <strong>{estado.copiaCooperativa}</strong>.</>}
           </p>
         </div>
       )}
@@ -333,6 +403,7 @@ export function AdminConsolidado({ families, sealed, products, providers, period
           <p style={{ fontSize: '12px', color: '#c62828', fontWeight: 700, margin: 0 }}>📮 Envío real activo</p>
           <p style={{ fontSize: '11px', color: '#666', margin: '4px 0 0', lineHeight: 1.5 }}>
             Las órdenes se enviarán directamente al correo de cada proveedor, desde {estado.remitente}.
+            {estado.copiaCooperativa && <> La copia con el enlace para reenviar por WhatsApp llega a <strong>{estado.copiaCooperativa}</strong>.</>}
           </p>
         </div>
       )}
@@ -525,6 +596,14 @@ export function AdminConsolidado({ families, sealed, products, providers, period
                   </p>
                 )}
 
+                {/* Para los proveedores que no usan correo. La comisión reenvía
+                    por WhatsApp el enlace de confirmación, o el pedido ya
+                    redactado: antes había que copiarlo del consolidado y
+                    reescribirlo a mano sacando categorías y columnas. */}
+                {pv && o && o.token && o.status !== 'confirmada' && (
+                  <CompartirOrden orden={o} proveedor={pv} period={period} />
+                )}
+
                 {/* Anotar por teléfono lo que el proveedor respondió. Solo se
                     ofrece si la orden ya salió, y nunca pisa la palabra del
                     proveedor: si él mismo contestó por el enlace, esta puerta
@@ -596,18 +675,22 @@ export function AdminConsolidado({ families, sealed, products, providers, period
                 )}
 
                 {pv && (() => {
+                  // Sin correo del proveedor la orden igual se genera: le llega la
+                  // copia a la cooperativa con el enlace, para reenviarlo por
+                  // WhatsApp. Antes el botón quedaba muerto y la comisión tenía
+                  // que armar el pedido a mano.
                   const bloqueado = !pedidos.cerrados;
-                  const inhabilitado = sendingId === pv.id || sinCorreo || bloqueado;
-                  const gris = sinCorreo || bloqueado;
+                  const inhabilitado = sendingId === pv.id || bloqueado;
+                  const gris = bloqueado;
                   return (
                     <button onClick={() => handleSend(g)} disabled={inhabilitado}
                       title={bloqueado ? 'Primero hay que cerrar los pedidos, en la pestaña Período'
-                        : sinCorreo ? 'Carga el correo del proveedor en la pestaña Proveedores' : ''}
+                        : sinCorreo ? 'El proveedor no tiene correo: se genera la orden y la copia con el enlace llega a la cooperativa' : ''}
                       style={{ width: '100%', marginTop: '9px', padding: '11px', background: gris ? '#eee' : o && o.sent_at ? '#fff8e1' : '#4CAF50', color: gris ? '#999' : o && o.sent_at ? '#e65100' : 'white', border: gris ? '1px solid #ddd' : o && o.sent_at ? '1px solid #ffc107' : 'none', borderRadius: '8px', cursor: inhabilitado ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '13px' }}>
                       {sendingId === pv.id ? 'Enviando...'
                         : bloqueado ? '🔒 Cierra los pedidos para poder enviar'
-                        : sinCorreo ? 'Sin correo — no se puede enviar'
-                        : o && o.sent_at ? '↻ Volver a enviar orden de compra'
+                        : o && o.sent_at ? '↻ Volver a generar la orden de compra'
+                        : sinCorreo ? '📲 Generar orden para WhatsApp (sin correo)'
                         : '📧 Enviar orden de compra'}
                     </button>
                   );

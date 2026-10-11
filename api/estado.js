@@ -4,18 +4,23 @@
 // vea ANTES de apretar el botón si está en modo prueba o si le va a llegar de
 // verdad al proveedor. No expone la clave, solo si existe.
 
-const { CORREO_PRUEBAS, REMITENTE } = require('./_lib/correo');
+const { CORREO_PRUEBAS, REMITENTE, CORREO_COOPERATIVA } = require('./_lib/correo');
 const { haySecreto } = require('./_lib/sesion');
 const { hayServiceKey } = require('./_lib/db');
 
 // Este endpoint es público: no exponemos direcciones completas para no
 // regalárselas a un recolector de correos que pase por aquí.
-function enmascarar(correo) {
-  if (!correo) return null;
+function enmascararUno(correo) {
   const [u, dom] = String(correo).split('@');
   if (!dom) return '***';
   const visible = u.slice(0, 2);
   return visible + '*'.repeat(Math.max(3, u.length - 2)) + '@' + dom;
+}
+
+// CORREO_COOPERATIVA puede traer varias casillas separadas por coma.
+function enmascarar(correo) {
+  if (!correo) return null;
+  return String(correo).split(',').map(s => s.trim()).filter(Boolean).map(enmascararUno).join(', ');
 }
 
 module.exports = async (req, res) => {
@@ -25,6 +30,8 @@ module.exports = async (req, res) => {
     destinoPruebas: enmascarar(CORREO_PRUEBAS),
     remitente: enmascarar(REMITENTE.email),
     remitenteNombre: REMITENTE.name,
+    // Adónde llega la copia de cada orden, con el enlace para WhatsApp.
+    copiaCooperativa: enmascarar(CORREO_COOPERATIVA),
     brevoConfigurado: !!process.env.BREVO_API_KEY,
 
     // Si RLS ya está encendido y falta una de estas dos, el síntoma es una

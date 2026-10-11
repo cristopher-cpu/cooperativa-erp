@@ -4,10 +4,34 @@
 // navegador: por eso la variable se llama BREVO_API_KEY y no REACT_APP_*, que
 // CRA incrustaría en el JavaScript público.
 
+// El remitente tiene que ser una dirección verificada en Brevo (Senders).
+// Configurable en Vercel con CORREO_REMITENTE, para que el Go Live —pasar al
+// correo oficial de la cooperativa— sea cambiar una variable y no el código.
 const REMITENTE = {
-  name: 'Pedidos Cooperativa Quilpueblo',
-  email: 'crisyaleusandoia@gmail.com',
+  name: process.env.CORREO_REMITENTE_NOMBRE || 'Pedidos Cooperativa Quilpueblo',
+  email: process.env.CORREO_REMITENTE || 'crisyaleusandoia@gmail.com',
 };
+
+// Adónde llega la COPIA de cada orden de compra, con el enlace de
+// confirmación listo para reenviar por WhatsApp. Pedido de la cooperativa
+// (27-sep-2026): muchos proveedores no usan correo, y con la copia la comisión
+// no tiene que reescribir el pedido a mano. Por defecto es el mismo remitente
+// de Brevo; en el Go Live se cambia CORREO_COOPERATIVA en Vercel.
+//
+// Admite varias casillas separadas por coma (pedido de la cooperativa,
+// 10-oct-2026: Cristopher y Ruby reciben las dos la copia durante el piloto).
+const CORREO_COOPERATIVA = process.env.CORREO_COOPERATIVA || REMITENTE.email;
+
+function listaCooperativa(excluir) {
+  const lista = String(CORREO_COOPERATIVA || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const filtrada = excluir
+    ? lista.filter(e => e.toLowerCase() !== String(excluir).toLowerCase())
+    : lista;
+  return filtrada.length ? filtrada : null;
+}
 
 // Mientras esté definido, TODAS las órdenes se desvían acá en vez de ir al
 // proveedor real. Es la salvaguarda para que un correo a medio afinar no le
@@ -110,6 +134,89 @@ function plantillaOrden({ providerName, isMember, periodLabel, lines, total, lin
 </body></html>`;
 }
 
+// La copia para la cooperativa: la misma orden, más un recuadro arriba con el
+// enlace a la vista y el pedido ya redactado para pegar en WhatsApp.
+function plantillaCopia(params, { esPrueba, destinoReal, sinCorreo }) {
+  const lineasTxt = params.lines.map(l => '• ' + l.qty + ' × ' + l.name + (l.unit ? ' (' + l.unit + ')' : '')).join('\n');
+  const whatsapp =
+    'Hola ' + params.providerName + ', te escribimos de la Cooperativa Quilpueblo.\n' +
+    'Este es nuestro pedido' + (params.periodLabel ? ' de ' + params.periodLabel : '') + ':\n\n' +
+    lineasTxt + '\n\nTotal aprox.: ' + clp(params.total) + '\n\n' +
+    'Puedes confirmar qué tienes disponible acá, producto por producto:\n' + params.linkConfirmar;
+
+  const recuadro = `
+    <div style="max-width:640px;margin:0 auto;padding:24px 16px 0">
+      <div style="background:#e3f2fd;border:1px solid #90caf9;border-radius:10px;padding:14px 16px">
+        <p style="margin:0;font-size:14px;color:#1565c0;font-weight:700">📋 Copia para la cooperativa — ${esc(params.providerName)}</p>
+        <p style="margin:6px 0 0;font-size:13px;color:#333;line-height:1.5">
+          ${sinCorreo
+            ? 'Este proveedor <strong>no tiene correo cargado</strong>: la orden no se le envió. Reenvíale el enlace o el texto de abajo por WhatsApp.'
+            : 'La orden se envió a <strong>' + esc(destinoReal || '') + '</strong>' + (esPrueba ? ' (en modo prueba, desviada)' : '') + '. Si el proveedor no usa correo, reenvíale el enlace por WhatsApp.'}
+        </p>
+        <p style="margin:10px 0 4px;font-size:12px;color:#666">Enlace de confirmación:</p>
+        <p style="margin:0;font-size:13px;word-break:break-all"><a href="${esc(params.linkConfirmar)}">${esc(params.linkConfirmar)}</a></p>
+        <p style="margin:12px 0 4px;font-size:12px;color:#666">Texto listo para WhatsApp (seleccionar y copiar):</p>
+        <pre style="margin:0;padding:10px;background:#fff;border:1px solid #dde;border-radius:6px;font-size:12px;white-space:pre-wrap;font-family:inherit">${esc(whatsapp)}</pre>
+      </div>
+    </div>`;
+  return plantillaOrden({ ...params, esPrueba, destinoReal }).replace('<body style="margin:0;padding:0;background:#f0f7f0;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif">',
+    '<body style="margin:0;padding:0;background:#f0f7f0;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif">' + recuadro);
+}
+
+async function mandarBrevo({ apiKey, to, subject, html, replyTo }) {
+  let res, body;
+  try {
+    res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': apiKey, 'Content-Type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        sender: REMITENTE,
+        to,
+        subject,
+        htmlContent: html,
+        ...(replyTo ? { replyTo } : {}),
+      }),
+    });
+    body = await res.text();
+  } catch (e) {
+    return { ok: false, error: 'No se pudo contactar a Brevo: ' + e.message };
+  }
+  if (!res.ok) return { ok: false, error: traducirError(body) };
+  return { ok: true };
+}
+
+function traducirError(body) {
+  let detalle = body;
+  try {
+    const j = JSON.parse(body);
+    detalle = j.message || body;
+    if (j.code === 'unauthorized') {
+      detalle = 'Brevo rechazó la clave API. Revisa que BREVO_API_KEY sea correcta en Vercel.';
+    } else if (/sender/i.test(String(j.message))) {
+      detalle = 'Brevo no acepta el remitente ' + REMITENTE.email +
+        '. Verifícalo en Brevo: Settings → Senders, Domains, IPs → Senders → Add a sender.';
+    }
+  } catch { /* body no era JSON */ }
+  return detalle;
+}
+
+// Envía la copia a la cooperativa. Nunca hace fallar el envío principal: si la
+// copia no sale, la orden ya le llegó al proveedor y el enlace está en el panel.
+async function enviarCopiaCooperativa(params, { esPrueba, destinoReal, sinCorreo, excluir }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  const destinatarios = listaCooperativa(excluir);
+  if (!apiKey || !destinatarios) return { ok: false, error: 'sin configurar' };
+  const asunto = (esPrueba ? '[PRUEBA] ' : '') + '[Copia] Orden de compra a ' + params.providerName +
+    (params.periodLabel ? ' — ' + params.periodLabel : '');
+  const r = await mandarBrevo({
+    apiKey,
+    to: destinatarios.map(email => ({ email, name: 'Cooperativa Quilpueblo' })),
+    subject: asunto,
+    html: plantillaCopia(params, { esPrueba, destinoReal, sinCorreo }),
+  });
+  return { ...r, destinatario: destinatarios.join(', ') };
+}
+
 async function enviarOrden(params) {
   const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
@@ -119,48 +226,40 @@ async function enviarOrden(params) {
   const esPrueba = !!CORREO_PRUEBAS;
   const destinatario = esPrueba ? CORREO_PRUEBAS : params.providerEmail;
 
+  // Sin correo del proveedor la orden igual sirve: se manda solo la copia a la
+  // cooperativa, con el enlace para reenviarlo por WhatsApp.
   if (!destinatario) {
-    return { ok: false, error: 'El proveedor "' + params.providerName + '" no tiene correo cargado.' };
+    const copia = await enviarCopiaCooperativa(params, { esPrueba, destinoReal: null, sinCorreo: true });
+    if (!copia.ok) {
+      return { ok: false, error: 'El proveedor "' + params.providerName + '" no tiene correo, y la copia a la cooperativa tampoco salió: ' + copia.error };
+    }
+    return { ok: true, sinCorreo: true, destinatario: null, esPrueba, copiaA: copia.destinatario };
   }
 
   const html = plantillaOrden({ ...params, esPrueba, destinoReal: params.providerEmail });
   const asunto = (esPrueba ? '[PRUEBA] ' : '') +
     'Orden de compra Cooperativa Quilpueblo' + (params.periodLabel ? ' — ' + params.periodLabel : '');
 
-  let res, body;
-  try {
-    res = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: { 'api-key': apiKey, 'Content-Type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({
-        sender: REMITENTE,
-        to: [{ email: destinatario, name: params.providerName }],
-        subject: asunto,
-        htmlContent: html,
-      }),
-    });
-    body = await res.text();
-  } catch (e) {
-    return { ok: false, error: 'No se pudo contactar a Brevo: ' + e.message };
-  }
+  // Si el proveedor responde el correo, la respuesta le llega a la cooperativa
+  // (la primera casilla de la lista, si hay varias).
+  const primeraCooperativa = listaCooperativa();
+  const r = await mandarBrevo({
+    apiKey,
+    to: [{ email: destinatario, name: params.providerName }],
+    subject: asunto,
+    html,
+    replyTo: primeraCooperativa && primeraCooperativa[0] !== REMITENTE.email ? { email: primeraCooperativa[0] } : null,
+  });
+  if (!r.ok) return { ok: false, error: r.error, destinatario, esPrueba };
 
-  if (!res.ok) {
-    let detalle = body;
-    try {
-      const j = JSON.parse(body);
-      detalle = j.message || body;
-      // El error más común de la primera vez, traducido a algo accionable.
-      if (j.code === 'unauthorized') {
-        detalle = 'Brevo rechazó la clave API. Revisa que BREVO_API_KEY sea correcta en Vercel.';
-      } else if (/sender/i.test(String(j.message))) {
-        detalle = 'Brevo no acepta el remitente ' + REMITENTE.email +
-          '. Verifícalo en Brevo: Settings → Senders, Domains, IPs → Senders → Add a sender.';
-      }
-    } catch { /* body no era JSON */ }
-    return { ok: false, error: detalle, destinatario, esPrueba };
-  }
+  // La copia a la cooperativa sale a todas las casillas configuradas, salvo la
+  // que ya recibió la orden directamente (en modo prueba suelen coincidir).
+  let copiaA = null, copiaError = null;
+  const copia = await enviarCopiaCooperativa(params, { esPrueba, destinoReal: params.providerEmail, sinCorreo: false, excluir: destinatario });
+  if (copia.ok) copiaA = copia.destinatario;
+  else if (copia.error !== 'sin configurar') copiaError = copia.error;
 
-  return { ok: true, destinatario, esPrueba };
+  return { ok: true, destinatario, esPrueba, copiaA, copiaError };
 }
 
-module.exports = { enviarOrden, REMITENTE, CORREO_PRUEBAS };
+module.exports = { enviarOrden, REMITENTE, CORREO_PRUEBAS, CORREO_COOPERATIVA };

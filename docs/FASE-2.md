@@ -1,7 +1,7 @@
 # Fase 2 — Estado, decisiones y pendientes
 
 Cooperativa de Consumo Responsable **Quilpueblo**.
-Última actualización: 19 de septiembre de 2026 (RLS en producción, y la bodega ya no se sobrevende).
+Última actualización: 27 de septiembre de 2026 (reunión previa al piloto: saldos atómicos, sellado automático, retiro sin condiciones).
 
 ---
 
@@ -214,6 +214,8 @@ Seis hallazgos de una sesión de prueba. Tres eran bugs, tres eran funcionalidad
 que faltaba.
 
 **1. Se podía marcar un retiro con descuentos del proveedor sin aplicar.**
+*(El bloqueo que se describe acá se revirtió el 27-sep-2026: ver etapa 8. El
+retiro ya no se bloquea; el descuento se aplica al marcarlo.)*
 El proveedor ya había avisado que no traía un producto y Retiros dejaba marcar
 la entrega igual: el descuento vivía solo en la pestaña Faltantes y Extras, y si
 nadie pasaba por ahí primero se le cobraba a la familia algo que nunca llegó.
@@ -468,6 +470,70 @@ bodega funciona igual y el botón de dar de baja queda deshabilitado con el avis
 
 El reporte de bodega trae una hoja **Mermas y sobrantes** cuyo total es la
 pérdida *real*: sumar las devoluciones y los ajustes daría una pérdida inflada.
+
+### Etapa 8 — Lo que salió de la reunión del 27-sep-2026 (antes del piloto) ✅
+
+Piloto real desde el viernes 2 de octubre con Fabián, Patricia Vila y Ruby.
+Reinicio: `db/RESET-inicio-piloto-mvp.sql`. Migración: `013_saldos_atomicos_y_borradores.sql`
+(todo degrada si no corrió).
+
+**Bugs de saldos que se corrigieron.** Los cuatro primeros movían plata real:
+
+1. **Un pago registrado después de cerrar el período borraba el cobro.** El
+   cierre descontaba los saldos en la base pero no en la pantalla; el siguiente
+   pago se calculaba como «saldo viejo en pantalla + monto» y se sobrescribía.
+   Ahora todo movimiento es `saldo + delta` en la base (`coop_mover_saldo`), y
+   el panel recarga los saldos después de cerrar.
+2. **Reintentar un cierre fallido cobraba dos veces.** Se saltaba lo «ya
+   cobrado» mirando el estado de la pantalla, que nunca se enteraba de
+   `charged_at`. Ahora los pedidos se leen frescos y `coop_cobrar_pedido` baja
+   el saldo y marca el pedido en la misma operación.
+3. **Reservar de bodega con la pantalla desactualizada sobrescribía el saldo**
+   (el cliente creía que el trigger no existía y aplicaba su propia cuenta).
+   Ahora el saldo de partida se lee de la base antes de insertar.
+4. **Los faltantes se devolvían al precio de hoy, no al que se pagó.** Si el
+   precio cambió entre el sellado y el retiro, la devolución no calzaba con el
+   cobro. Ahora se usa el precio congelado en el pedido (`precioCongelado`).
+5. **Descuentos que quedaban sin fundamento:** el proveedor decía «no lo
+   tengo», se descontaba, y si después la respuesta cambiaba el descuento se
+   quedaba. Faltantes y Extras los muestra y ofrece quitarlos.
+6. **Extras de familias sin pedido no se cobraban nunca** (el cierre se
+   saltaba a quien no tenía pedido).
+7. Sellar no miraba la respuesta de la base (decía «sellado» aunque fallara) y
+   un doble clic sellaba dos veces. Índice único `(period_id, family_id)`.
+8. El buscador del catálogo de familias se caía con un producto sin proveedor;
+   el de la pestaña Familias no filtraba a quienes tienen comisión.
+9. La orden de compra nunca usaba el formato normalizado (la consulta no
+   pedía `format_qty`/`format_unit`).
+
+**Decisiones:**
+
+- **El retiro no se condiciona a nada** — ni al pago ni a haber aplicado antes
+  los descuentos. «Esencial de cooperativa.» Lo que el proveedor no trajo se
+  descuenta en el mismo clic de «Marcar retirado». Revierte el bloqueo de la
+  etapa 4c.
+- **Carrito guardado y sellado automático.** El carrito se guarda en
+  `order_drafts` mientras se arma. Al cerrar la ventana de pedidos (por fecha,
+  medida en hora de Chile, o a mano) `coop_sellar_borradores` lo sella con los
+  precios del maestro de ese momento. Lo disparan el cron diario de Vercel
+  (`/api/sellar-vencidos`, 04:10 UTC), el botón «Cerrar pedidos» y cualquier
+  carga del panel con los pedidos ya cerrados. El pedido queda marcado
+  `sealed_auto` y la familia lo ve.
+- **Copia de la OC a la cooperativa**, con el enlace de confirmación y el texto
+  listo para WhatsApp. Variables en Vercel: `CORREO_COOPERATIVA` (adónde va la
+  copia; por defecto el remitente, admite varias casillas separadas por coma,
+  p. ej. `cristopher@...,ruby@...`) y `CORREO_REMITENTE` (debe estar verificado
+  en Brevo). **En el Go Live se cambian esas dos variables, no el código.** Un
+  proveedor sin correo ya no bloquea la orden: se genera y solo sale la copia.
+  El consolidado tiene «Copiar pedido con enlace» y «Abrir WhatsApp» (wa.me,
+  gratis).
+- **Repartir un producto** (el zapallo que se llevan en pedazos): en Faltantes
+  y Extras. Cada parte es un extra; si una familia lo tenía completo en su
+  pedido se le devuelve como faltante. `repartirMonto` garantiza que las partes
+  sumen exacto el total.
+- **Buscadores de productos** buscan por producto, proveedor o categoría en
+  todos los módulos, y marcan 🏪 lo que además está en la bodega del período.
+- **Se eliminó el botón «Reset Demo»** del panel.
 
 ## 5. Sustitución de productos — decidido: no construir por ahora
 

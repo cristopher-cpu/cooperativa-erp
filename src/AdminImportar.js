@@ -173,7 +173,7 @@ function Normalizador({ products, setProducts, currentAdmin }) {
 
 // ── B. Importar una planilla de precios ─────────────────────────────────────
 
-function ImportadorPrecios({ products, setProducts, providers, currentAdmin }) {
+function ImportadorPrecios({ products, setProducts, providers, currentAdmin, enBodega = null }) {
   const [texto, setTexto] = useState('');
   const [proveedorId, setProveedorId] = useState('');
   const [elecciones, setElecciones] = useState({});   // nº de fila → producto elegido
@@ -484,7 +484,7 @@ function ImportadorPrecios({ products, setProducts, providers, currentAdmin }) {
                           Coinciden {l.candidatos.length}: {l.candidatos.map(c => c.name).join(' · ')}
                         </p>
                       )}
-                      <BuscadorProducto
+                      <BuscadorProducto enBodega={enBodega}
                         productos={l.candidatos && l.candidatos.length ? l.candidatos : universo}
                         value={(elecciones[l.fila] || {}).id || ''}
                         onChange={prod => setElecciones(p => {
@@ -519,11 +519,11 @@ function ImportadorPrecios({ products, setProducts, providers, currentAdmin }) {
   );
 }
 
-export function AdminImportar({ products, setProducts, providers = [], currentAdmin }) {
+export function AdminImportar({ products, setProducts, providers = [], currentAdmin, enBodega = null }) {
   return (
     <div>
       <Normalizador products={products} setProducts={setProducts} currentAdmin={currentAdmin} />
-      <ImportadorPrecios products={products} setProducts={setProducts} providers={providers} currentAdmin={currentAdmin} />
+      <ImportadorPrecios products={products} setProducts={setProducts} providers={providers} currentAdmin={currentAdmin} enBodega={enBodega} />
     </div>
   );
 }
