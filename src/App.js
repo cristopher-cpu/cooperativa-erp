@@ -149,12 +149,19 @@ function App() {
   const [charges, setCharges] = useState(null);       // null = falta la migración 007
   const [exemptions, setExemptions] = useState([]);
 
+  // Espera a que haya sesión, igual que `recargarPedidos`. El período se conoce
+  // desde la pantalla de ingreso (`/api/portada` lo trae sin sesión), así que
+  // sin esta guarda los cargos se pedían ANTES de entrar: con RLS encendido la
+  // base respondía una lista vacía —correctamente, nadie se había identificado—
+  // y esa lista vacía se quedaba pegada. Como `period.id` no cambia al entrar,
+  // el efecto no volvía a correr nunca y el período aparecía sin ningún cargo:
+  // la familia no veía el bodegaje en su pedido y el panel no lo podía editar.
   const cargarCargos = useCallback(async () => {
-    if (!period?.id) { setCharges(null); setExemptions([]); return; }
+    if (!period?.id || !user?.id) { setCharges(null); setExemptions([]); return; }
     const [c, e] = await Promise.all([getPeriodCharges(period.id), getChargeExemptions(period.id)]);
     setCharges(c);
     setExemptions(e || []);
-  }, [period?.id]);
+  }, [period?.id, user?.id]);
 
   useEffect(() => { cargarCargos(); }, [cargarCargos]);
 
