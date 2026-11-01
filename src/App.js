@@ -1065,9 +1065,19 @@ function FamilyApp({ user, families, setFamilies, products, sealed, sealOrderLoc
                   ))}
                 </div>
                 {saldo !== 0 && (
-                  <div style={{ padding: '10px 12px', background: saldo > 0 ? '#e8f5e9' : '#ffebee', border: `1px solid ${saldo > 0 ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}>
+                  <div style={{ padding: '10px 12px', background: saldo > 0 ? '#e8f5e9' : '#ffebee', border: `1px solid ${saldo > 0 ? '#81c784' : '#ef9a9a'}`, borderRadius: '8px', marginBottom: saldo < 0 ? 0 : '1rem', display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: '13px', color: '#555' }}>Tu saldo actual</span>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: saldo > 0 ? '#2e7d32' : '#c62828' }}>{saldo > 0 ? 'A favor ' : 'Pendiente '} ${Math.abs(saldo).toLocaleString('es-CL')}</span>
+                  </div>
+                )}
+                {/* La familia necesita un solo número para transferir: el
+                    pedido más lo que ya debía. Sin esto, Ruby tenía que sumar
+                    a mano el total del carrito y su saldo pendiente
+                    (feedback del piloto, 1-nov-2026). */}
+                {saldo < 0 && (
+                  <div style={{ padding: '10px 12px', background: '#2d5a2d', borderRadius: '8px', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'white' }}>Total a transferir (pedido + saldo pendiente)</span>
+                    <span style={{ fontSize: '14px', fontWeight: 700, color: 'white' }}>${(total + cargo - saldo).toLocaleString('es-CL')}</span>
                   </div>
                 )}
                 {/* Lo que pasa si no sella. La cooperativa pidió que el carrito
