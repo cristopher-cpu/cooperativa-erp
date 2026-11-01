@@ -11,6 +11,12 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Sin esto, con el sistema operativo en modo oscuro el navegador pinta los
+     <select> (como el de "Familia a eximir") con su tema oscuro nativo,
+     pero el texto de las opciones hereda el color claro de la app: queda
+     invisible aunque las opciones sigan ahí para elegir a ciegas. La app
+     siempre es de fondo claro, así que los controles nativos también. */
+  color-scheme: light;
 }
 
 * { scroll-behavior: smooth; }
